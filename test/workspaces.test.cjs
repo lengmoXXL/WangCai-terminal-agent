@@ -5,20 +5,19 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
+const { createWorkspace, launchApp, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
 
-/** The checkout next to this repository runs this plugin; its Electron launches the app. */
+/** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
-const { _electron: electron } = require(join(app ?? '../WangCai', 'node_modules/playwright'));
 
-test('Electron: local terminal, reconnect and relaunch', { timeout: 180000 }, async () => {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-desktop-test-')));
+test('local terminal, reconnect and relaunch', { timeout: 180000 }, async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-workspaces-')));
   const env = { ...process.env, HOME: home, WANGCAI_HOME: '', SHELL: '/bin/bash', ELECTRON_RENDERER_URL: '' };
   delete env.ELECTRON_RUN_AS_NODE;
   let desktop;
   let devServer;
   const launch = async () => {
-    desktop = await electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), `--user-data-dir=${join(home, 'electron-data')}`], cwd: app, env });
+    desktop = await launchApp(home, env);
     const page = await desktop.firstWindow();
     page.on('pageerror', (error) => console.error('UI error:', error));
     await waitForShell(page);
@@ -75,7 +74,7 @@ test('Electron: local terminal, reconnect and relaunch', { timeout: 180000 }, as
     await page.getByRole('tab', { name: '文件', exact: true }).waitFor();
     const storedTabs = JSON.parse(readFileSync(join(home, '.local/share/wangcai/tabs.json'), 'utf8'));
     assert.deepEqual(storedTabs, [{ plugin: 'files', id: 'directory', workspaceId: workspaces[0].id }]);
-    await page.screenshot({ path: 'tests/dist/screenshots/desktop.png' });
+    await page.screenshot({ path: 'tests/dist/screenshots/workspaces.png' });
     await desktop.close(); desktop = undefined;
     page = await launch();
     await page.getByRole('tablist', { name: '工作区', exact: true }).getByRole('tab').filter({ hasText: '~' }).waitFor();
@@ -110,7 +109,7 @@ test('workspaces can be dragged into a new order', { timeout: 180000 }, async ()
   let desktop;
   let page;
   const open = async () => {
-    desktop = await electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), `--user-data-dir=${join(home, 'electron')}`], cwd: app, env });
+    desktop = await launchApp(home, env);
     page = await desktop.firstWindow();
     await waitForShell(page);
   };

@@ -3,12 +3,21 @@ const { join, resolve } = require('node:path');
 
 /**
  * The WangCai checkout next to this repository, which runs this plugin. It has to be built: the app
- * launches in place. Returns undefined when it is not there, so a test can skip rather than fail.
+ * launches in place and loads this plugin's files from this directory. A missing one is an error
+ * rather than a skip, because every test here drives the app.
  */
 exports.wangcaiApp = () => {
   const root = resolve(__dirname, '../../WangCai');
   const built = ['desktop/dist/main/index.js', 'desktop/node/bin/node', 'wangcaicli/dist/debug/wangcai'];
-  return built.every((name) => existsSync(join(root, name))) ? root : undefined;
+  if (!built.every((name) => existsSync(join(root, name)))) throw new Error('build the WangCai checkout next to this repository');
+  return root;
+};
+
+/** Launches that checkout on this home, with the Electron the checkout depends on. */
+exports.launchApp = (home, env) => {
+  const app = exports.wangcaiApp();
+  const { _electron: electron } = require(join(app, 'node_modules/playwright'));
+  return electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), `--user-data-dir=${join(home, 'electron')}`], cwd: app, env });
 };
 
 /** A plugin checkout next to this one, already built into the files the app loads. */
@@ -17,10 +26,10 @@ const checkout = (id) => {
   return existsSync(join(directory, 'main.cjs')) ? directory : undefined;
 };
 
-/** Where a plugin's files are: a checkout next to this one, which its own build has to have written. */
+/** Where a plugin's files are, for a test that writes init.ts itself. */
 exports.pluginDirectory = (id) => {
-  const directory = resolve(__dirname, `../../WangCai-${id}`);
-  if (!existsSync(join(directory, 'main.cjs'))) throw new Error(`build WangCai-${id} first`);
+  const directory = checkout(id);
+  if (!directory) throw new Error(`build WangCai-${id} first`);
   return directory;
 };
 

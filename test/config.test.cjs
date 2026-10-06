@@ -1,14 +1,13 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, realpathSync, mkdirSync, readFileSync, writeFileSync, rmSync } = require('node:fs');
+const { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, openWorkspaceMenu, pluginDirectory, waitForShell, wangcaiApp } = require('./harness.cjs');
+const { createWorkspace, launchApp, openWorkspaceMenu, pluginDirectory, waitForShell, wangcaiApp } = require('./harness.cjs');
 
-/** The checkout next to this repository runs these plugins; its Electron launches the app. */
+/** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
-const { _electron: electron } = require(join(app ?? '../WangCai', 'node_modules/playwright'));
 
 test('user config: init.ts drives the plugins, the UI theme, their own config and the terminal', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-config-')));
@@ -17,7 +16,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
   const init = join(home, '.config/wangcai/init.ts');
   let desktop;
   const launch = async () => {
-    desktop = await electron.launch({ executablePath: require(join(app, 'node_modules/electron')), args: [join(app, 'desktop'), `--user-data-dir=${join(home, 'electron')}`], cwd: app, env });
+    desktop = await launchApp(home, env);
     return desktop.firstWindow();
   };
   const launchReady = async () => {
