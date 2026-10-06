@@ -17,6 +17,13 @@ const checkout = (id) => {
   return existsSync(join(directory, 'main.cjs')) ? directory : undefined;
 };
 
+/** Where a plugin's files are: a checkout next to this one, which its own build has to have written. */
+exports.pluginDirectory = (id) => {
+  const directory = resolve(__dirname, `../../WangCai-${id}`);
+  if (!existsSync(join(directory, 'main.cjs'))) throw new Error(`build WangCai-${id} first`);
+  return directory;
+};
+
 /** The app loads only what init.ts lists, so a test names the plugins and where to read them from. */
 exports.writeInit = (home, lists) => {
   const { workspaces = [], tabs = [] } = lists ?? { workspaces: ['terminal-agent'], tabs: ['files', 'terminal'] };
