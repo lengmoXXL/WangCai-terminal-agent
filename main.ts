@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { connect, type MachineConnection, type Pty, type WorkspaceActive, type WorkspaceRow } from '@wangcai/sdk';
-import type { MainContext } from '@wangcai/sdk/channel';
+import { connect, type MachineConnection, type Pty, type WorkspaceActive, type WorkspaceRow } from '@lengmoxxl/sdk';
+import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { registerFilePaths } from './file-links/paths';
 import type { Machine, MachineState, Workspace } from './shared';
 

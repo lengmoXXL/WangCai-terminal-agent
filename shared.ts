@@ -1,5 +1,5 @@
-import type { FileClick, MachineState as ConnectionState, Profile, TerminalEvent } from '@wangcai/sdk';
-export type { Machine, Session } from '@wangcai/sdk';
+import type { FileClick, MachineState as ConnectionState, Profile, TerminalEvent } from '@lengmoxxl/sdk';
+export type { Machine, Session } from '@lengmoxxl/sdk';
 
 // The config this plugin accepts: main.ts declares a schema for the same fields.
 export type Font = { family: string; size: number; lineHeight: number };

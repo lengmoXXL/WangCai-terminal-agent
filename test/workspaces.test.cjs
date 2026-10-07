@@ -5,15 +5,14 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, launchApp, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
+const { createWorkspace, launchApp, testEnv, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
 
 /** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
 
 test('local terminal, reconnect and relaunch', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-workspaces-')));
-  const env = { ...process.env, HOME: home, WANGCAI_HOME: '', SHELL: '/bin/bash', ELECTRON_RENDERER_URL: '' };
-  delete env.ELECTRON_RUN_AS_NODE;
+  const env = testEnv(home);
   let desktop;
   let devServer;
   const launch = async () => {
@@ -32,9 +31,9 @@ test('local terminal, reconnect and relaunch', { timeout: 180000 }, async () => 
     await createWorkspace(page);
     await localTabs.getByRole('tab').filter({ hasText: '~' }).waitFor();
     await page.locator('.terminal-pane.active .xterm-helper-textarea').focus();
-    await page.keyboard.type("printf 'DESKTOP_%s\\n' success");
+    await page.keyboard.type("printf 'WORKSPACE_%s\\n' success");
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('DESKTOP_success'));
+    await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('WORKSPACE_success'));
     await page.keyboard.type("printf 'X%.0s' {1..400}; echo");
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')].some((element) => element.textContent.length > 60 && /^X+$/.test(element.textContent)));
@@ -59,11 +58,11 @@ test('local terminal, reconnect and relaunch', { timeout: 180000 }, async () => 
     await createWorkspace(page);
     await localTabs.getByRole('tab').nth(1).waitFor();
     await localTabs.getByRole('tab').nth(0).click();
-    await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('DESKTOP_success'));
+    await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('WORKSPACE_success'));
     await localTabs.getByRole('tab').nth(1).click({ button: 'right' });
     await page.getByRole('menuitem', { name: '关闭工作区', exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll('.workspaces [role=tab]').length === 1);
-    await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('DESKTOP_success'));
+    await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('WORKSPACE_success'));
     // What the plugin keeps of its own is the workspaces it holds, not the machines init.ts names.
     const stored = JSON.parse(readFileSync(join(home, '.local/share/wangcai/data/terminal-agent/config.json'), 'utf8'));
     assert.deepEqual(Object.keys(stored), ['workspaces']);
@@ -78,7 +77,7 @@ test('local terminal, reconnect and relaunch', { timeout: 180000 }, async () => 
     await desktop.close(); desktop = undefined;
     page = await launch();
     await page.getByRole('tablist', { name: '工作区', exact: true }).getByRole('tab').filter({ hasText: '~' }).waitFor();
-    await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('DESKTOP_success'));
+    await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('WORKSPACE_success'));
     assert.equal((await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces[0].sessionId, workspaces[0].sessionId);
     await page.getByRole('tab', { name: '文件', exact: true }).waitFor();
     await page.getByRole('tab', { name: '~' }).click({ button: 'right' });
@@ -104,8 +103,7 @@ test('local terminal, reconnect and relaunch', { timeout: 180000 }, async () => 
 
 test('workspaces can be dragged into a new order', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-workspace-order-')));
-  const env = { ...process.env, HOME: home, WANGCAI_HOME: '', SHELL: '/bin/bash', ELECTRON_RENDERER_URL: '' };
-  delete env.ELECTRON_RUN_AS_NODE;
+  const env = testEnv(home);
   let desktop;
   let page;
   const open = async () => {

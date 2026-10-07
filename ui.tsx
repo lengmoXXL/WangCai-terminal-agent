@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import type { UiContext } from '@wangcai/sdk/channel';
+import type { UiContext } from '@lengmoxxl/sdk/channel';
 import { registerFileLinks } from './file-links/links';
 import type { Config, MachineState, Session, Settings, WangcaiAPI, Workspace } from './shared';
 import '@xterm/xterm/css/xterm.css';

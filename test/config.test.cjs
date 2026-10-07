@@ -4,15 +4,14 @@ const { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync } = require(
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, launchApp, openWorkspaceMenu, pluginDirectory, waitForShell, wangcaiApp } = require('./harness.cjs');
+const { createWorkspace, launchApp, openWorkspaceMenu, pluginDirectory, testEnv, waitForShell, wangcaiApp } = require('./harness.cjs');
 
 /** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
 
 test('user config: init.ts drives the plugins, the UI theme, their own config and the terminal', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-config-')));
-  const env = { ...process.env, HOME: home, WANGCAI_HOME: '', SHELL: '/bin/bash', ELECTRON_RENDERER_URL: '' };
-  delete env.ELECTRON_RUN_AS_NODE;
+  const env = testEnv(home);
   const init = join(home, '.config/wangcai/init.ts');
   let desktop;
   const launch = async () => {
