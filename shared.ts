@@ -4,7 +4,7 @@ export type { Machine, Session } from '@lengmoxxl/sdk';
 // The config this plugin accepts: main.ts declares a schema for the same fields.
 export type Font = { family: string; size: number; lineHeight: number };
 export type Settings = Profile & { font: Font };
-export interface Workspace { id: string; machineId: string; sessionId?: string; name?: string }
+export interface Workspace { id: string; machineId: string; sessionId?: string; cwd?: string; name?: string }
 export interface MachineState extends ConnectionState { machineId: string }
 export interface Config { workspaces: Workspace[]; active?: string }
 export interface WangcaiAPI {

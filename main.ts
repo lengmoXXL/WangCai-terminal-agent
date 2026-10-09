@@ -113,7 +113,9 @@ export async function activate(context: MainContext) {
     const session = workspace.sessionId === undefined ? undefined : (await node.pty.list()).find((item) => item.id === workspace.sessionId);
     if (session && session.exit_code === null) return;
     if (workspace.sessionId !== undefined) await node.pty.close(workspace.sessionId).catch(() => {});
-    workspace.sessionId = (await node.pty.create({ rows: 24, cols: 80 })).id;
+    // A cwd that is not a directory fails the create outright.
+    const cwd = workspace.cwd && (await node.fs.stat(workspace.cwd))?.isDirectory ? workspace.cwd : undefined;
+    workspace.sessionId = (await node.pty.create({ rows: 24, cols: 80 }, cwd)).id;
   }
 
   function sessionFor(workspace: Workspace) {
@@ -267,10 +269,10 @@ export async function activate(context: MainContext) {
     return value;
   }
 
-  let renaming = false;
-  async function rename() {
-    if (renaming) return;
-    renaming = true;
+  let following = false;
+  async function follow() {
+    if (following) return;
+    following = true;
     try {
       let changed = false;
       for (const workspace of workspaces) {
@@ -278,6 +280,11 @@ export async function activate(context: MainContext) {
         if (!node || !workspace.sessionId) continue;
         let cwd: string;
         try { cwd = await node.pty.cwd(workspace.sessionId); } catch { continue; }
+        // A replacement terminal opens where this shell is.
+        if (cwd !== workspace.cwd) {
+          workspace.cwd = cwd;
+          changed = true;
+        }
         const home = await homeOf(workspace.machineId, node);
         const name = cwd === home ? '~' : posix.basename(cwd) || '/';
         if (name !== workspace.name) {
@@ -290,12 +297,12 @@ export async function activate(context: MainContext) {
         await announce();
       }
     } finally {
-      renaming = false;
+      following = false;
     }
   }
-  const renamer = setInterval(() => void rename(), 1000);
+  const follower = setInterval(() => void follow(), 1000);
   return () => {
-    clearInterval(renamer);
+    clearInterval(follower);
     for (const remove of handlers) remove();
     for (const id of new Set([...connections.keys(), ...pending.keys()])) disconnect(id);
   };

@@ -147,3 +147,46 @@ test('workspaces can be dragged into a new order', { timeout: 180000 }, async ()
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('a workspace whose terminal is gone opens again where it was', { timeout: 180000 }, async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-workspace-cwd-')));
+  const env = testEnv(home);
+  const directory = join(home, 'alpha');
+  const stored = () => JSON.parse(readFileSync(join(home, '.local/share/wangcai/data/terminal-agent/config.json'), 'utf8')).workspaces[0];
+  let desktop;
+  let page;
+  try {
+    writeInit(home);
+    mkdirSync(directory);
+    desktop = await launchApp(home, env);
+    page = await desktop.firstWindow();
+    await waitForShell(page);
+    await createWorkspace(page);
+
+    await page.locator('.terminal-pane.active .xterm-helper-textarea').focus();
+    await page.keyboard.type('cd alpha');
+    await page.keyboard.press('Enter');
+    // The directory is polled from the shell, so this waits for the poll rather than the cd.
+    for (let attempt = 0; attempt < 100 && stored().cwd !== directory; attempt++) await page.waitForTimeout(100);
+    assert.equal(stored().cwd, directory, 'the workspace keeps the directory its shell is in');
+
+    // The shell the workspace had exits, so the next terminal it opens is a replacement.
+    await page.keyboard.type('exit');
+    await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: '重新打开终端' }).click();
+
+    // The pane drops input until its shell is attached, so pwd is printed until the screen shows it.
+    const printed = () => page.evaluate(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent ?? '');
+    for (let attempt = 0; attempt < 30 && !(await printed()).includes(directory); attempt++) {
+      await page.locator('.terminal-pane.active .xterm-helper-textarea').click();
+      await page.keyboard.type('pwd');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(200);
+    }
+    assert.ok((await printed()).includes(directory), 'the replacement opens where the last terminal was');
+  } finally {
+    await desktop?.close();
+    try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
+    rmSync(home, { recursive: true, force: true });
+  }
+});
