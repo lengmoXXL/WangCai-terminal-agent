@@ -22,7 +22,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
 
   useEffect(() => {
     const term = new Terminal({
-      cursorBlink: true, fontSize: profile.font.size, lineHeight: profile.font.lineHeight,
+      fontSize: profile.font.size, lineHeight: profile.font.lineHeight,
       fontFamily: profile.font.family,
       // xterm takes its scrollbar width from the overview ruler, which also paints the ruler outline.
       overviewRuler: { width: 10 },
