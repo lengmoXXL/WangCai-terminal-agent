@@ -85,7 +85,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
     assert.match(await page.locator('#root').innerText(), /未安装插件/);
     assert.deepEqual(await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, document.documentElement.style.colorScheme]), ['rgb(18, 19, 20)', 'dark']);
     // The app's own profile carries no plugin fields: fonts belong to the plugins alone.
-    assert.deepEqual(await page.evaluate(async () => Object.keys(await window.wangcai.config()).sort()), ['agent', 'theme']);
+    assert.deepEqual(await page.evaluate(async () => Object.keys(await window.wangcai.config()).sort()), ['theme']);
     await desktop.close(); desktop = undefined;
   } finally {
     if (desktop) await desktop.close().catch(() => {});
