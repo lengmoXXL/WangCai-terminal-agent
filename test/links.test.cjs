@@ -95,34 +95,37 @@ const linked = async (page) => (await screen(page)).links.map((text, row) => (te
 /** Every row of a block, top to bottom. */
 const covers = ({ first, last }) => Array.from({ length: last - first + 1 }, (_, at) => first + at);
 
-/** The rows a printed path covers, which are the rows that say it between them. */
-async function pathBlock(page, path) {
+/** The rows a printed line covers, which are the rows that say it between them. */
+async function printedBlock(page, text) {
   const { rows } = await screen(page);
-  const last = rows.findLastIndex((text) => text.includes(path.slice(-16)));
-  assert.notEqual(last, -1, `no row holds the end of ${path}: ${JSON.stringify(rows)}`);
+  const last = rows.findLastIndex((row) => row.includes(text.slice(-16)));
+  assert.notEqual(last, -1, `no row holds the end of ${text}: ${JSON.stringify(rows)}`);
   let first = last;
-  while (first > 0 && rows[first - 1] && path.includes(rows[first - 1])) first--;
-  assert.equal(rows.slice(first, last + 1).join(''), path, `the rows of ${path} do not say it together`);
+  while (first > 0 && rows[first - 1] && text.includes(rows[first - 1])) first--;
+  assert.equal(rows.slice(first, last + 1).join(''), text, `the rows of ${text} do not say it together`);
   return { first, last };
 }
 
+/** The point one character of a row sits at, which is where a pointer goes to touch that cell. */
+const point = (page, row, at) => page.evaluate(([row, at]) => {
+  const element = document.querySelectorAll('.terminal-pane.active .xterm-rows > div')[row];
+  let skip = at;
+  for (const span of element.querySelectorAll('span')) {
+    if (skip >= span.firstChild.length) { skip -= span.firstChild.length; continue; }
+    const range = document.createRange();
+    range.setStart(span.firstChild, skip);
+    range.setEnd(span.firstChild, skip + 1);
+    const rect = range.getBoundingClientRect();
+    return [rect.left + rect.width / 2, rect.top + rect.height / 2];
+  }
+  throw new Error(`row ${row} is shorter than ${at + 1} characters`);
+}, [row, at]);
+
 /** Puts the pointer on one character of a row, after leaving the terminal so the line is read again. */
 async function hover(page, row, at) {
-  const point = await page.evaluate(([row, at]) => {
-    const element = document.querySelectorAll('.terminal-pane.active .xterm-rows > div')[row];
-    let skip = at;
-    for (const span of element.querySelectorAll('span')) {
-      if (skip >= span.firstChild.length) { skip -= span.firstChild.length; continue; }
-      const range = document.createRange();
-      range.setStart(span.firstChild, skip);
-      range.setEnd(span.firstChild, skip + 1);
-      const rect = range.getBoundingClientRect();
-      return [rect.left + rect.width / 2, rect.top + rect.height / 2];
-    }
-    throw new Error(`row ${row} is shorter than ${at + 1} characters`);
-  }, [row, at]);
+  const [x, y] = await point(page, row, at);
   await page.mouse.move(0, 0);
-  await page.mouse.move(point[0], point[1]);
+  await page.mouse.move(x, y);
   await page.waitForFunction(() => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div span')].some((span) => span.style.textDecoration === 'underline'));
 }
 
@@ -149,7 +152,7 @@ test('a path the terminal wrapped is one link on every row it covers, and the wr
     await type(`clear; printf '%s\\n' '${path}'\r`);
     await page.waitForFunction((name) => document.querySelector('.terminal-pane.active .xterm-rows').textContent.includes(name), 'linked-file.ts');
 
-    const wrapped = await pathBlock(page, path);
+    const wrapped = await printedBlock(page, path);
     assert.ok(wrapped.last > wrapped.first, 'the printed path wraps');
     for (const row of covers(wrapped)) {
       await hover(page, row, 1);
@@ -160,13 +163,55 @@ test('a path the terminal wrapped is one link on every row it covers, and the wr
     // A resize rewraps the buffer: the link has to cover the rows the path has now, not the old ones.
     await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(560, 800));
     await page.waitForFunction(([path, rows]) => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')].filter((row) => row.textContent && path.includes(row.textContent)).length !== rows, [path, covers(wrapped).length]);
-    const rewrapped = await pathBlock(page, path);
+    const rewrapped = await printedBlock(page, path);
     assert.notEqual(covers(rewrapped).length, covers(wrapped).length, 'the resize changes how the path wraps');
     for (const row of covers(rewrapped)) {
       await hover(page, row, 1);
       assert.deepEqual(await linked(page), covers(rewrapped), `hovering row ${row} after the resize links the rows the path has now`);
       assert.equal((await screen(page)).links.join(''), path, `hovering row ${row} after the resize links the path and nothing else`);
     }
+  } finally {
+    await desktop?.close();
+    try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a printed web address is a link on every row it covers, and the app opens it', { timeout: 180000 }, async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-links-')));
+  const env = testEnv(home);
+  let desktop;
+  try {
+    // An address longer than any terminal is wide, so it prints across a wrap.
+    const address = `https://example.com/${'a-very-long-address-segment/'.repeat(7)}page.html`;
+    writeInit(home);
+    desktop = await launchApp(home, env);
+    // The window hands a link to the system browser: the test takes that call instead.
+    await desktop.evaluate(({ ipcMain }) => { ipcMain.removeHandler('wangcai:open'); ipcMain.handle('wangcai:open', (_event, url) => { globalThis.opened = url; }); });
+    const page = await desktop.firstWindow();
+    await waitForShell(page);
+    await createWorkspace(page);
+    const session = (await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces[0].sessionId;
+    const type = (data) => page.evaluate(({ session, data }) => window.wangcai.request('terminal-agent', 'pty', { op: 'input', sessionId: session, params: { data } }), { session, data });
+    await type('stty -echo\r');
+    await type(`clear; printf '%s\\n' '${address}'\r`);
+    await page.waitForFunction((end) => document.querySelector('.terminal-pane.active .xterm-rows').textContent.includes(end), address.slice(-12));
+
+    const wrapped = await printedBlock(page, address);
+    assert.ok(wrapped.last > wrapped.first, 'the printed address wraps');
+    // The pointer finds the address as a link on every row the wrap put it on.
+    for (const row of covers(wrapped)) await hover(page, row, 1);
+    assert.deepEqual(await linked(page), covers(wrapped), 'the address is one link on every row it covers');
+    assert.equal((await screen(page)).links.join(''), address, 'the link is the whole address');
+
+    const [x, y] = await point(page, wrapped.first, 1);
+    await page.mouse.click(x, y);
+    let opened;
+    for (let attempt = 0; attempt < 50 && !opened; attempt++) {
+      opened = await desktop.evaluate(() => globalThis.opened);
+      if (!opened) await page.waitForTimeout(100);
+    }
+    assert.equal(opened, address, 'the app is handed the address');
   } finally {
     await desktop?.close();
     try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}

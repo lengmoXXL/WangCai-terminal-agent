@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Terminal } from '@xterm/xterm';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { FitAddon } from '@xterm/addon-fit';
 import type { UiContext } from '@lengmoxxl/sdk/channel';
 import { registerFileLinks } from './file-links/links';
@@ -11,8 +12,8 @@ import './style.css';
 
 let api: WangcaiAPI;
 
-function TerminalPane({ session, active, connected, generation, profile }: {
-  session: Session; active: boolean; connected: boolean; generation: number; profile: Settings;
+function TerminalPane({ context, session, active, connected, generation, profile }: {
+  context: UiContext; session: Session; active: boolean; connected: boolean; generation: number; profile: Settings;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>(null);
@@ -32,6 +33,8 @@ function TerminalPane({ session, active, connected, generation, profile }: {
     term.loadAddon(addon);
     // What a program in the terminal copies goes to the system clipboard: OSC 52.
     term.loadAddon(new ClipboardAddon());
+    // What the terminal prints as a web address is a link the app opens in a browser.
+    term.loadAddon(new WebLinksAddon((_event, uri) => { void context.host.open(uri).catch((error: Error) => setError(error.message)); }));
     term.open(element.current!);
     const links = registerFileLinks(term, {
       resolve: (paths) => api.resolve(session.id, paths),
@@ -100,7 +103,7 @@ function TerminalPane({ session, active, connected, generation, profile }: {
   </div>;
 }
 
-function App({ profile }: { profile: Settings }) {
+function App({ context, profile }: { context: UiContext; profile: Settings }) {
   const [config, setConfig] = useState<Config>();
   const [states, setStates] = useState<Record<string, MachineState>>({});
   const [error, setError] = useState('');
@@ -124,6 +127,7 @@ function App({ profile }: { profile: Settings }) {
       const session = sessionFor(workspace);
       return session ? <TerminalPane
         key={`${workspace.id}:${session.id}`}
+        context={context}
         session={session}
         active={workspace.id === config.active}
         connected={states[workspace.machineId]?.status === 'connected'}
@@ -154,6 +158,6 @@ export function mount(container: HTMLElement, context: UiContext) {
   const profile: Settings = context.host.config;
   container.style.fontFamily = profile.font.family;
   const root = createRoot(container);
-  root.render(<App profile={profile} />);
+  root.render(<App context={context} profile={profile} />);
   return () => root.unmount();
 }
