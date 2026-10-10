@@ -4,7 +4,7 @@ const { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } = require(
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, launchApp, testEnv, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
+const { createWorkspace, launchApp, run, testEnv, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
 
 /** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
@@ -145,11 +145,9 @@ test('a path the terminal wrapped is one link on every row it covers, and the wr
     page.on('pageerror', (error) => console.error('UI error:', error));
     await waitForShell(page);
     await createWorkspace(page);
-    const session = (await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces[0].sessionId;
-    const type = (data) => page.evaluate(({ session, data }) => window.wangcai.request('terminal-agent', 'pty', { op: 'input', sessionId: session, params: { data } }), { session, data });
     // The echo of a typed line would sit in the buffer beside the path, so it is printed with echo off.
-    await type('stty -echo\r');
-    await type(`clear; printf '%s\\n' '${path}'\r`);
+    await run(page, 'stty -echo');
+    await run(page, `clear; printf '%s\\n' '${path}'`);
     await page.waitForFunction((name) => document.querySelector('.terminal-pane.active .xterm-rows').textContent.includes(name), 'linked-file.ts');
 
     const wrapped = await printedBlock(page, path);
@@ -191,10 +189,8 @@ test('a printed web address is a link on every row it covers, and the app opens 
     const page = await desktop.firstWindow();
     await waitForShell(page);
     await createWorkspace(page);
-    const session = (await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces[0].sessionId;
-    const type = (data) => page.evaluate(({ session, data }) => window.wangcai.request('terminal-agent', 'pty', { op: 'input', sessionId: session, params: { data } }), { session, data });
-    await type('stty -echo\r');
-    await type(`clear; printf '%s\\n' '${address}'\r`);
+    await run(page, 'stty -echo');
+    await run(page, `clear; printf '%s\\n' '${address}'`);
     await page.waitForFunction((end) => document.querySelector('.terminal-pane.active .xterm-rows').textContent.includes(end), address.slice(-12));
 
     const wrapped = await printedBlock(page, address);

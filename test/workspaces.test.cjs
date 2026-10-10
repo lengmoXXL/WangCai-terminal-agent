@@ -5,7 +5,7 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, launchApp, testEnv, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
+const { createWorkspace, launchApp, run, testEnv, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
 
 /** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
@@ -30,12 +30,9 @@ test('local terminal, reconnect and relaunch', { timeout: 180000 }, async () => 
     const localTabs = page.getByRole('tablist', { name: '工作区', exact: true });
     await createWorkspace(page);
     await localTabs.getByRole('tab').filter({ hasText: '~' }).waitFor();
-    await page.locator('.terminal-pane.active .xterm-helper-textarea').focus();
-    await page.keyboard.type("printf 'WORKSPACE_%s\\n' success");
-    await page.keyboard.press('Enter');
+    await run(page, "printf 'WORKSPACE_%s\\n' success");
     await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('WORKSPACE_success'));
-    await page.keyboard.type("printf 'X%.0s' {1..400}; echo");
-    await page.keyboard.press('Enter');
+    await run(page, "printf 'X%.0s' {1..400}; echo");
     await page.waitForFunction(() => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')].some((element) => element.textContent.length > 60 && /^X+$/.test(element.textContent)));
     const overhang = await page.evaluate(() => Math.max(...[...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')].map((element) => (element.lastElementChild?.getBoundingClientRect().right ?? 0) - element.getBoundingClientRect().right)));
     assert.ok(overhang <= 0.5, `terminal rows clip their last column by ${overhang.toFixed(2)}px`);
@@ -113,25 +110,21 @@ test('workspaces can be dragged into a new order', { timeout: 180000 }, async ()
   };
   const WORKSPACE_NAMES = '[aria-label="工作区"] [role=tab] .name';
   const settled = (expected) => page.waitForFunction(([selector, want]) => [...document.querySelectorAll(selector)].map((node) => node.textContent).join() === want, [WORKSPACE_NAMES, expected.join()]);
-  const cd = async (index, directory) => {
-    const sessionId = (await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces[index].sessionId;
-    await page.evaluate(({ sessionId, directory }) => window.wangcai.request('terminal-agent', 'pty', { op: 'input', sessionId, params: { data: `cd ${directory}\r` } }), { sessionId, directory });
-  };
   try {
     writeInit(home);
     for (const name of ['alpha', 'beta', 'gamma']) mkdirSync(join(home, name));
     await open();
     await createWorkspace(page);
     await settled(['~']);
-    await cd(0, 'alpha');
+    await run(page, 'cd alpha');
     await settled(['alpha']);
     await createWorkspace(page);
     await settled(['alpha', '~']);
-    await cd(1, 'beta');
+    await run(page, 'cd beta');
     await settled(['alpha', 'beta']);
     await createWorkspace(page);
     await settled(['alpha', 'beta', '~']);
-    await cd(2, 'gamma');
+    await run(page, 'cd gamma');
     await settled(['alpha', 'beta', 'gamma']);
     await page.getByRole('tab', { name: 'beta' }).dragTo(page.getByRole('tab', { name: 'alpha' }), { targetPosition: { x: 40, y: 4 } });
     await settled(['beta', 'alpha', 'gamma']);
@@ -163,24 +156,19 @@ test('a workspace whose terminal is gone opens again where it was', { timeout: 1
     await waitForShell(page);
     await createWorkspace(page);
 
-    await page.locator('.terminal-pane.active .xterm-helper-textarea').focus();
-    await page.keyboard.type('cd alpha');
-    await page.keyboard.press('Enter');
+    await run(page, 'cd alpha');
     // The directory is polled from the shell, so this waits for the poll rather than the cd.
     for (let attempt = 0; attempt < 100 && stored().cwd !== directory; attempt++) await page.waitForTimeout(100);
     assert.equal(stored().cwd, directory, 'the workspace keeps the directory its shell is in');
 
     // The shell the workspace had exits, so the next terminal it opens is a replacement.
-    await page.keyboard.type('exit');
-    await page.keyboard.press('Enter');
+    await run(page, 'exit');
     await page.getByRole('button', { name: '重新打开终端' }).click();
 
     // The pane drops input until its shell is attached, so pwd is printed until the screen shows it.
     const printed = () => page.evaluate(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent ?? '');
     for (let attempt = 0; attempt < 30 && !(await printed()).includes(directory); attempt++) {
-      await page.locator('.terminal-pane.active .xterm-helper-textarea').click();
-      await page.keyboard.type('pwd');
-      await page.keyboard.press('Enter');
+      await run(page, 'pwd');
       await page.waitForTimeout(200);
     }
     assert.ok((await printed()).includes(directory), 'the replacement opens where the last terminal was');

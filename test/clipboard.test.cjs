@@ -4,7 +4,7 @@ const { mkdtempSync, realpathSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createWorkspace, launchApp, testEnv, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
+const { createWorkspace, launchApp, run, testEnv, waitForShell, wangcaiApp, writeInit } = require('./harness.cjs');
 
 /** The checkout next to this repository, which these tests drive. */
 const app = wangcaiApp();
@@ -19,16 +19,15 @@ test('what a program in the terminal copies reaches the system clipboard', { tim
     const page = await desktop.firstWindow();
     await waitForShell(page);
     await createWorkspace(page);
-    const session = (await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces[0].sessionId;
     const text = 'OSC52_COPY_ME';
     // What a program copies with: an OSC 52 sequence, which the shell prints for it here.
     const sequence = `\\033]52;c;${Buffer.from(text).toString('base64')}\\007`;
-    const type = (data) => page.evaluate(({ session, data }) => window.wangcai.request('terminal-agent', 'pty', { op: 'input', sessionId: session, params: { data } }), { session, data });
-    // The clipboard is the machine's, so it is told apart from what the same test copied before.
-    await page.evaluate(() => navigator.clipboard.writeText('not copied yet'));
-    await type(`printf '${sequence}'\r`);
+    // The clipboard is the machine's, so it is told apart from what the same test copied before. The app's
+    // own clipboard is read and written here: the window's needs focus, which a headless run cannot promise.
+    await desktop.evaluate(({ clipboard }) => clipboard.writeText('not copied yet'));
+    await run(page, `printf '${sequence}'`);
     // What the program copied shows up in the clipboard the window shares with the machine.
-    const copied = async () => (await page.evaluate(() => navigator.clipboard.readText())) === text;
+    const copied = () => desktop.evaluate(({ clipboard }, want) => clipboard.readText() === want, text);
     for (let attempt = 0; attempt < 50 && !await copied(); attempt++) await page.waitForTimeout(100);
     assert.ok(await copied(), 'the clipboard never took what the program copied');
   } finally {

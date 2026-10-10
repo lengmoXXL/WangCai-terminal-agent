@@ -12,8 +12,8 @@ import './style.css';
 
 let api: WangcaiAPI;
 
-function TerminalPane({ context, session, active, connected, generation, profile }: {
-  context: UiContext; session: Session; active: boolean; connected: boolean; generation: number; profile: Settings;
+function TerminalPane({ context, session, active, connected, generation, profile, machineId }: {
+  context: UiContext; session: Session; active: boolean; connected: boolean; generation: number; profile: Settings; machineId: string;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>(null);
@@ -45,50 +45,66 @@ function TerminalPane({ context, session, active, connected, generation, profile
     let alive = true;
     let replaying = false;
     let ready = false;
+    let socket: WebSocket | undefined;
     setError('');
-    const sendSize = () => {
-      if (!alive || !ready || replaying) return;
-      void api.pty('resize', session.id, { rows: term.rows, cols: term.cols }).catch((error: Error) => { if (alive) setError(error.message); });
+    const send = (op: string, params: Record<string, unknown> = {}) => {
+      socket!.send(JSON.stringify({ op, session_id: session.id, ...params }));
     };
-    const unsubscribe = api.onTerminal((event) => {
-      if (!alive || event.session_id !== session.id) return;
-      if (event.event === 'snapshot') {
-        replaying = true;
-        term.reset();
-        term.resize(event.cols, event.rows);
-        term.write(event.data, () => {
+    const sendSize = () => {
+      if (!ready || replaying) return;
+      send('resize', { rows: term.rows, cols: term.cols });
+    };
+    if (connected) {
+      void api.address(machineId).then((url) => {
+        if (!alive) return;
+        socket = new WebSocket(url);
+        // Chromium hands binary frames over as blobs unless it is told otherwise.
+        socket.binaryType = 'arraybuffer';
+        socket.onopen = () => send('attach');
+        const decoder = new TextDecoder();
+        socket.onmessage = ({ data }) => {
           if (!alive) return;
-          replaying = false;
-          if (!element.current?.offsetWidth) return;
-          addon.fit();
-          sendSize();
-        });
-      } else {
-        term.write(event.data);
-      }
-    });
+          if (typeof data === 'string') {
+            const reply = JSON.parse(data);
+            if (reply.error) setError(reply.error);
+            return;
+          }
+          const bytes = new Uint8Array(data);
+          const length = new DataView(data).getUint32(0);
+          const event = JSON.parse(decoder.decode(bytes.subarray(4, 4 + length))) as { event: string; rows: number; cols: number };
+          const payload = bytes.subarray(4 + length);
+          if (event.event === 'snapshot') {
+            replaying = true;
+            ready = true;
+            term.reset();
+            term.resize(event.cols, event.rows);
+            term.write(payload, () => {
+              if (!alive) return;
+              replaying = false;
+              if (!element.current?.offsetWidth) return;
+              addon.fit();
+              sendSize();
+            });
+            return;
+          }
+          term.write(payload);
+        };
+        socket.onclose = () => { if (alive) setError('终端连接已断开'); };
+      }).catch((error: Error) => { if (alive) setError(error.message); });
+    }
     const input = term.onData((data) => {
       if (!ready || replaying) return;
-      void api.pty('input', session.id, { data }).catch((error: Error) => { if (alive) setError(error.message); });
+      send('input', { data });
     });
     const resize = term.onResize(sendSize);
     const observer = new ResizeObserver(() => {
       if (!replaying && element.current?.offsetWidth && element.current.offsetHeight) addon.fit();
     });
     observer.observe(element.current!);
-    if (connected) {
-      void api.pty('attach', session.id).then(() => {
-        if (!alive) return;
-        ready = true;
-        sendSize();
-      }).catch((error: Error) => { if (alive) setError(error.message); });
-    }
     return () => {
       alive = false;
-      ready = false;
-      unsubscribe(); input.dispose(); resize.dispose(); observer.disconnect();
-      links.dispose(); term.dispose(); terminal.current = null;
-      if (connected) void api.pty('detach', session.id).catch(() => {});
+      input.dispose(); resize.dispose(); observer.disconnect();
+      links.dispose(); socket?.close(); term.dispose(); terminal.current = null;
     };
   }, [session.id, connected, generation, profile]);
 
@@ -133,6 +149,7 @@ function App({ context, profile }: { context: UiContext; profile: Settings }) {
         connected={states[workspace.machineId]?.status === 'connected'}
         generation={states[workspace.machineId]?.generation ?? 0}
         profile={profile}
+        machineId={workspace.machineId}
       /> : null;
     })}
     {front && frontSession?.exit_code !== null && <div className="terminal-message">
@@ -149,11 +166,10 @@ export function mount(container: HTMLElement, context: UiContext) {
     config: () => context.ui.request('config'),
     states: () => context.ui.request('states'),
     selectWorkspace: (id) => context.ui.request('workspace-select', { id }),
-    pty: (op, sessionId, params = {}) => context.ui.request('pty', { op, sessionId, params }),
+    address: (machineId) => context.ui.request('address', { machineId }),
     resolve: (sessionId, paths) => context.ui.request('resolve', { sessionId, paths }),
     onConfig: (callback) => context.ui.subscribe('config', callback),
     onState: (callback) => context.ui.subscribe('state', callback),
-    onTerminal: (callback) => context.ui.subscribe('terminal', callback),
   };
   const profile: Settings = context.host.config;
   container.style.fontFamily = profile.font.family;
