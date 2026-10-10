@@ -225,8 +225,7 @@ export async function activate(context: MainContext) {
   }));
   handlers.push(context.global.subscribe('workspace:query', () => { void announce(); }));
   handlers.push(context.ui.handle('address', ({ machineId }: { machineId: string }) => {
-    // The published SDK still hides the port; the app's connection carries it once it is ready.
-    const node = connections.get(machineId) as (MachineConnection & { port: number }) | undefined;
+    const node = connections.get(machineId);
     if (!node) throw new Error('Machine is not connected');
     return `ws://localhost:${node.port}`;
   }));
