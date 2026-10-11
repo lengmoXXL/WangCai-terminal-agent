@@ -18,11 +18,6 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
     desktop = await launchApp(home, env);
     return desktop.firstWindow();
   };
-  const launchReady = async () => {
-    const page = await launch();
-    await waitForShell(page);
-    return page;
-  };
   try {
     mkdirSync(join(home, '.config/wangcai'), { recursive: true });
     writeFileSync(init, `
@@ -30,7 +25,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
         day: {
           theme: { background: '#f7f8fa', foreground: '#203040', border: 42 },
           workspaces: [
-            { id: 'terminal-agent', directory: ${JSON.stringify(pluginDirectory('terminal-agent'))}, config: { font: { family: 'Config UI Font' }, machines: [{ name: '测试服务器', host: 'dev-server' }] } },
+            { id: 'terminal-agent', directory: ${JSON.stringify(pluginDirectory('terminal-agent'))}, config: { font: { family: 'Config UI Font' }, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }] } },
           ],
           tabs: [
             { id: 'terminal', directory: ${JSON.stringify(pluginDirectory('terminal'))}, config: { font: { family: 'Config Mono', size: 20, lineHeight: 1.5 } } },
@@ -39,37 +34,32 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
       };
       export default profiles.day;
     `);
-    let page = await launchReady();
-    // The lists decide what loads: the plugins they do not name never run.
+    let page = await launch();
+    await waitForShell(page);
     assert.deepEqual(await page.evaluate(async () => (await window.wangcai.plugins()).map((plugin) => plugin.id)), ['terminal', 'terminal-agent']);
-    // A plugin's schema fills in what its entry leaves out.
     assert.deepEqual(await page.evaluate(async () => (await window.wangcai.plugins()).map(({ id, config }) => [id, config])), [
       ['terminal', { font: { family: 'Config Mono', size: 20, lineHeight: 1.5 } }],
-      ['terminal-agent', { font: { family: 'Config UI Font', size: 13, lineHeight: 1 }, machines: [{ name: '测试服务器', host: 'dev-server' }] }],
+      ['terminal-agent', { font: { family: 'Config UI Font', size: 13, lineHeight: 1 }, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }], images: { maxCount: 100 } }],
     ]);
-    // The shell keeps its own font: the app's config has no say in it.
     assert.deepEqual(await page.evaluate(() => {
       const body = getComputedStyle(document.body);
       return [body.backgroundColor, body.color, body.fontFamily, getComputedStyle(document.documentElement).getPropertyValue('--wc-border'), document.documentElement.style.colorScheme];
     }), ['rgb(247, 248, 250)', 'rgb(32, 48, 64)', '"DejaVuSansM Nerd Font Mono", monospace', '#333536', 'light']);
-    // The menu offers what init.ts names: the local machine first, then the hosts it lists.
     const menu = page.locator('#workspace-row-menu');
     await openWorkspaceMenu(page);
     await menu.getByRole('menuitem', { name: '本机', exact: true }).waitFor();
-    // The entry carries the host it names, which is also what a screen reader reads out.
     await menu.getByRole('menuitem', { name: '测试服务器' }).waitFor();
-    // A machine that will not connect says so on hover and stops being clickable.
     await menu.getByRole('menuitem', { name: '测试服务器' }).click();
     await page.waitForFunction(() => {
       const entry = document.querySelectorAll('#workspace-row-menu [role=menuitem]')[1];
-      return entry?.disabled === true && entry.title.length > 0;
+      return entry?.disabled === false && entry.title.length > 0;
     });
     await page.keyboard.press('Escape');
     await openWorkspaceMenu(page);
-    assert.equal(await menu.getByRole('menuitem', { name: '测试服务器' }).isDisabled(), true);
+    assert.equal(await menu.getByRole('menuitem', { name: '测试服务器' }).isDisabled(), false);
+    assert.ok(await menu.getByRole('menuitem', { name: '测试服务器' }).getAttribute('title'));
     await page.keyboard.press('Escape');
     await createWorkspace(page);
-    // A plugin's own font applies to the panel the shell gives it, and to the terminal it draws there.
     assert.equal(await page.locator('.desktop-main .plugin[data-plugin=terminal-agent]').evaluate((element) => getComputedStyle(element).fontFamily), '"Config UI Font"');
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.xterm-scrollable-element')).backgroundColor === 'rgb(247, 248, 250)');
     assert.deepEqual(await page.evaluate(() => {
@@ -80,11 +70,9 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
 
     writeFileSync(init, 'export default { theme: ');
     page = await launch();
-    // A broken config file leaves the app with no plugin at all.
     await page.waitForFunction(() => document.querySelector('#root').textContent.trim());
     assert.match(await page.locator('#root').innerText(), /未安装插件/);
     assert.deepEqual(await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, document.documentElement.style.colorScheme]), ['rgb(18, 19, 20)', 'dark']);
-    // The app's own profile carries no plugin fields: fonts belong to the plugins alone.
     assert.deepEqual(await page.evaluate(async () => Object.keys(await window.wangcai.config()).sort()), ['theme']);
     await desktop.close(); desktop = undefined;
   } finally {

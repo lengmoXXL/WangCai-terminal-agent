@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { FitAddon } from '@xterm/addon-fit';
 import type { UiContext } from '@lengmoxxl/sdk/channel';
 import { registerFileLinks } from './file-links/links';
+import { maxImageBytes } from './shared';
 import type { Config, MachineState, Session, Settings, WangcaiAPI, Workspace } from './shared';
 import '@xterm/xterm/css/xterm.css';
 import './style.css';
@@ -33,7 +34,6 @@ function TerminalPane({ context, session, active, connected, generation, profile
     term.loadAddon(addon);
     // What a program in the terminal copies goes to the system clipboard: OSC 52.
     term.loadAddon(new ClipboardAddon());
-    // What the terminal prints as a web address is a link the app opens in a browser.
     term.loadAddon(new WebLinksAddon((_event, uri) => { void context.host.open(uri).catch((error: Error) => setError(error.message)); }));
     term.open(element.current!);
     const links = registerFileLinks(term, {
@@ -97,12 +97,38 @@ function TerminalPane({ context, session, active, connected, generation, profile
       send('input', { data });
     });
     const resize = term.onResize(sendSize);
+    let pasting = Promise.resolve();
+    const paste = (event: ClipboardEvent) => {
+      const image = [...(event.clipboardData?.items ?? [])].find((item) => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile();
+      if (!image) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      pasting = pasting.then(async () => {
+        if (!alive || !ready || replaying || socket?.readyState !== WebSocket.OPEN) return;
+        if (image.size > maxImageBytes) throw new Error('Image exceeds 16 MiB');
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(image);
+        });
+        if (!alive) return;
+        const path = await api.image(session.id, dataUrl);
+        if (!alive || !ready || replaying || socket?.readyState !== WebSocket.OPEN) return;
+        term.paste(/^[\w/.-]+$/.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`);
+      }).catch((error: Error) => { if (alive) setError(error.message); });
+    };
+    const surface = element.current!;
+    term.attachCustomKeyEventHandler((event) => !(event.key.toLowerCase() === 'v' && (event.metaKey || event.ctrlKey) && !event.altKey));
+    // Capture image pastes before xterm consumes the clipboard as plain text.
+    surface.addEventListener('paste', paste, true);
     const observer = new ResizeObserver(() => {
       if (!replaying && element.current?.offsetWidth && element.current.offsetHeight) addon.fit();
     });
     observer.observe(element.current!);
     return () => {
       alive = false;
+      surface.removeEventListener('paste', paste, true);
       input.dispose(); resize.dispose(); observer.disconnect();
       links.dispose(); socket?.close(); term.dispose(); terminal.current = null;
     };
@@ -168,6 +194,7 @@ export function mount(container: HTMLElement, context: UiContext) {
     selectWorkspace: (id) => context.ui.request('workspace-select', { id }),
     address: (machineId) => context.ui.request('address', { machineId }),
     resolve: (sessionId, paths) => context.ui.request('resolve', { sessionId, paths }),
+    image: (sessionId, dataUrl) => context.ui.request('image', { sessionId, dataUrl }),
     onConfig: (callback) => context.ui.subscribe('config', callback),
     onState: (callback) => context.ui.subscribe('state', callback),
   };

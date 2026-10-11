@@ -3,7 +3,8 @@ export type { Machine, Session } from '@lengmoxxl/sdk';
 
 // The config this plugin accepts: main.ts declares a schema for the same fields.
 export type Font = { family: string; size: number; lineHeight: number };
-export type Settings = Profile & { font: Font };
+export type Settings = Profile & { font: Font; images: { maxCount: number } };
+export const maxImageBytes = 16 * 1024 * 1024;
 export interface Workspace { id: string; machineId: string; sessionId?: string; cwd?: string; name?: string }
 export interface MachineState extends ConnectionState { machineId: string }
 export interface Config { workspaces: Workspace[]; active?: string }
@@ -14,6 +15,7 @@ export interface WangcaiAPI {
   selectWorkspace(id: string): Promise<void>;
   address(machineId: string): Promise<string>;
   resolve(sessionId: string, paths: string[]): Promise<Record<string, string>>;
+  image(sessionId: string, dataUrl: string): Promise<string>;
   onConfig(callback: (config: Config) => void): () => void;
   onState(callback: (state: MachineState) => void): () => void;
 }

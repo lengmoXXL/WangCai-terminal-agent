@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { MachineConnection, WorkspaceActive, WorkspaceRow } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { registerFilePaths } from './file-links/paths';
+import { registerImages } from './images';
 import type { Machine, MachineState, Workspace } from './shared';
 
 // Which fields this plugin takes from init.ts, and the default each one falls back to.
@@ -14,6 +15,7 @@ export const config = {
     lineHeight: { type: 'number', default: 1 },
   },
   machines: { type: 'array', default: [] },
+  images: { maxCount: { type: 'number', default: 100 } },
 };
 
 const LOCAL: Machine = { id: 'local', name: '本机' };
@@ -35,7 +37,7 @@ function machineList(given: unknown[]): Machine[] {
 
 export async function activate(context: MainContext) {
   const path = join(context.host.dataDirectory, 'config.json');
-  const settings: { machines: unknown[] } = context.host.config;
+  const settings: { machines: unknown[]; images: { maxCount: number } } = context.host.config;
   const machines = machineList(settings.machines);
   let workspaces: Workspace[] = [];
   let active: string | undefined;
@@ -159,6 +161,7 @@ export async function activate(context: MainContext) {
   }
 
   handlers.push(...registerFilePaths(context, hostOf));
+  handlers.push(registerImages(context, hostOf, settings.images.maxCount));
   handlers.push(context.ui.handle('config', () => ({ workspaces, active })));
   handlers.push(context.ui.handle('workspaces', rows));
   handlers.push(context.ui.handle('states', () => [...states.values()]));
