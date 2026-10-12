@@ -47,7 +47,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
     }), ['rgb(247, 248, 250)', 'rgb(32, 48, 64)', '"DejaVuSansM Nerd Font Mono", monospace', '#333536', 'light']);
     const menu = page.locator('#workspace-row-menu');
     await openWorkspaceMenu(page);
-    await menu.getByRole('menuitem', { name: '本机', exact: true }).waitFor();
+    await menu.getByRole('menuitem', { name: '新建 本机', exact: true }).waitFor();
     await menu.getByRole('menuitem', { name: '测试服务器' }).waitFor();
     await menu.getByRole('menuitem', { name: '测试服务器' }).click();
     await page.waitForFunction(() => {
