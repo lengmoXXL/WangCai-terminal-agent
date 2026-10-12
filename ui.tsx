@@ -46,6 +46,8 @@ function TerminalPane({ context, session, active, connected, generation, profile
     let replaying = false;
     let ready = false;
     let socket: WebSocket | undefined;
+    let attempt = 0;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     setError('');
     const send = (op: string, params: Record<string, unknown> = {}) => {
       socket!.send(JSON.stringify({ op, session_id: session.id, ...params }));
@@ -55,12 +57,24 @@ function TerminalPane({ context, session, active, connected, generation, profile
       send('resize', { rows: term.rows, cols: term.cols });
     };
     if (connected) {
-      void api.address(machineId).then((url) => {
+      const reconnect = (error: Error) => {
+        if (!alive || retry !== undefined) return;
+        ready = false;
+        setError(`${error.message}，正在重连…`);
+        retry = setTimeout(() => void connect(), Math.min(1000 * 2 ** attempt++, 5000));
+      };
+      // The app hands out another port when it reconnects, so every attempt asks for the address again.
+      const connect = async () => {
+        retry = undefined;
+        if (!alive) return;
+        let url: string;
+        try { url = await api.address(machineId); }
+        catch (error) { reconnect(error as Error); return; }
         if (!alive) return;
         socket = new WebSocket(url);
         // Chromium hands binary frames over as blobs unless it is told otherwise.
         socket.binaryType = 'arraybuffer';
-        socket.onopen = () => send('attach');
+        socket.onopen = () => { attempt = 0; send('attach'); };
         const decoder = new TextDecoder();
         socket.onmessage = ({ data }) => {
           if (!alive) return;
@@ -74,6 +88,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
           const event = JSON.parse(decoder.decode(bytes.subarray(4, 4 + length))) as { event: string; rows: number; cols: number };
           const payload = bytes.subarray(4 + length);
           if (event.event === 'snapshot') {
+            setError('');
             replaying = true;
             ready = true;
             term.reset();
@@ -89,8 +104,9 @@ function TerminalPane({ context, session, active, connected, generation, profile
           }
           term.write(payload);
         };
-        socket.onclose = () => { if (alive) setError('终端连接已断开'); };
-      }).catch((error: Error) => { if (alive) setError(error.message); });
+        socket.onclose = () => { if (alive) reconnect(new Error('终端连接已断开')); };
+      };
+      void connect();
     }
     const input = term.onData((data) => {
       if (!ready || replaying) return;
@@ -128,6 +144,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
     observer.observe(element.current!);
     return () => {
       alive = false;
+      clearTimeout(retry);
       surface.removeEventListener('paste', paste, true);
       input.dispose(); resize.dispose(); observer.disconnect();
       links.dispose(); socket?.close(); term.dispose(); terminal.current = null;
