@@ -216,6 +216,17 @@ export async function activate(context: MainContext) {
     save();
     await announce();
   }));
+
+  handlers.push(context.ui.handle('workspace-rename', async ({ id, name }: { id: string; name: string }) => {
+    const workspace = workspaces.find((item) => item.id === id);
+    if (!workspace) return;
+    workspace.name = name.trim() || undefined;
+    workspace.manual = workspace.name !== undefined;
+    // Recompute at once, or the row falls back to its numbered name until the next tick.
+    if (!workspace.manual) void follow();
+    save();
+    await announce();
+  }));
   handlers.push(context.ui.handle('workspace-move', ({ id, before }: { id: string; before?: string }) => {
     if (id === before) return;
     const index = workspaces.findIndex((workspace) => workspace.id === id);
@@ -260,6 +271,8 @@ export async function activate(context: MainContext) {
           workspace.cwd = cwd;
           changed = true;
         }
+        // A name given by hand stays what it is, wherever the shell goes.
+        if (workspace.manual) continue;
         const home = await homeOf(workspace.machineId, node);
         const name = cwd === home ? '~' : posix.basename(cwd) || '/';
         if (name !== workspace.name) {

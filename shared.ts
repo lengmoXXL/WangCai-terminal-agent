@@ -5,7 +5,7 @@ export type { Machine, Session } from '@lengmoxxl/sdk';
 export type Font = { family: string; size: number; lineHeight: number };
 export type Settings = Profile & { font: Font; images: { maxCount: number } };
 export const maxImageBytes = 16 * 1024 * 1024;
-export interface Workspace { id: string; machineId: string; sessionId?: string; cwd?: string; name?: string }
+export interface Workspace { id: string; machineId: string; sessionId?: string; cwd?: string; name?: string; manual?: boolean }
 export interface MachineState extends ConnectionState { machineId: string }
 export interface Config { workspaces: Workspace[]; active?: string }
 export interface WangcaiAPI {
