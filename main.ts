@@ -20,17 +20,31 @@ export const config = {
 
 const LOCAL: Machine = { id: 'local', name: '本机' };
 
-/** The hosts init.ts names, with the local machine always first; a host is both the id and the identity. */
+// The environment a machine asks for: strings only, so a mistyped value drops out instead of reaching a node.
+function machineEnvironment(input: unknown): Record<string, string> | undefined {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries((input ?? {}) as Record<string, unknown>)) {
+    if (typeof value === 'string') env[name] = value;
+  }
+  return Object.keys(env).length ? env : undefined;
+}
+
+/** The machines init.ts names, local first: a host is both the id and the ssh target, and 'local' is reserved. */
 function machineList(given: unknown[]): Machine[] {
   const machines = [LOCAL];
   for (const entry of given) {
-    const { name, host } = (entry ?? {}) as { name?: unknown; host?: unknown };
-    if (typeof name !== 'string' || !name.trim() || typeof host !== 'string' || host === 'local' || host.startsWith('-') || !/^[\w.@:+-]+$/.test(host)) {
+    const { name, host, env } = (entry ?? {}) as { name?: unknown; host?: unknown; env?: unknown };
+    if (host === 'local') {
+      const label = typeof name === 'string' ? name.trim() : '';
+      machines[0] = { ...LOCAL, name: label || LOCAL.name, env: machineEnvironment(env) };
+      continue;
+    }
+    if (typeof name !== 'string' || !name.trim() || typeof host !== 'string' || host.startsWith('-') || !/^[\w.@:+-]+$/.test(host)) {
       console.error('Unusable machine in init.ts, expected { name, host }:', entry);
       continue;
     }
     if (machines.some((machine) => machine.id === host)) continue;
-    machines.push({ id: host, name: name.trim(), host });
+    machines.push({ id: host, name: name.trim(), host, env: machineEnvironment(env) });
   }
   return machines;
 }
