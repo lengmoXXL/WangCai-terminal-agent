@@ -143,6 +143,8 @@ export async function activate(context: MainContext) {
     const cwd = workspace.cwd && (await node.fs.stat(workspace.cwd))?.isDirectory ? workspace.cwd : undefined;
     // What the agent in this workspace is asked to report into: the file it writes, which the app reads back.
     const root = await agentRoot(workspace.machineId, node);
+    const home = await homeOf(workspace.machineId, node);
+    if (home) await syncIntegrations(node, home);
     const env = root ? { WANGCAI_AGENT_STATE: posix.join(root, workspace.id) } : undefined;
     workspace.sessionId = (await node.pty.create({ rows: 24, cols: 80 }, { cwd, env })).id;
   }
@@ -346,10 +348,11 @@ export async function activate(context: MainContext) {
    *  the bytes go over as base64 through the machine's shell, and land under the name they are meant to have. */
   async function putFile(node: MachineConnection, path: string, content: string) {
     if (await readFile(node, path) === content) return;
+    // The name the bytes land under is the shell's own, so two writes of one file do not take each other's.
     const script = `set -eu
 mkdir -p "$1"
-printf %s "$3" | base64 -d > "$1/$2.tmp"
-mv "$1/$2.tmp" "$1/$2"`;
+printf %s "$3" | base64 -d > "$1/$2.$$.tmp"
+mv "$1/$2.$$.tmp" "$1/$2"`;
     const result = await shell(node, script, posix.dirname(path), posix.basename(path), Buffer.from(content).toString('base64'));
     if (result.code !== 0) throw new Error(Buffer.from(result.stderr).toString().trim() || `Cannot write ${path}`);
   }
@@ -386,11 +389,11 @@ mv "$1/$2.tmp" "$1/$2"`;
     return `${lines.join('\n').replace(/\n+$/, '')}\n`;
   }
 
-  /** What codex needs on a machine: the hook it runs, the entries that run it, and the trust to run those. */
-  async function installCodexHooks(home: string, node: MachineConnection, hook: string) {
+  /** What codex needs on a machine besides its hook: the entries in hooks.json that run it, and the trust to run
+   *  those. */
+  async function installCodexHooks(home: string, node: MachineConnection) {
     const directory = posix.join(home, '.codex');
     const scriptFile = posix.join(directory, 'wangcai-agent-state.sh');
-    await putFile(node, scriptFile, hook);
     const hooksFile = posix.join(directory, 'hooks.json');
     const stored = await readFile(node, hooksFile);
     let settings: Record<string, unknown> = {};
@@ -427,20 +430,29 @@ mv "$1/$2.tmp" "$1/$2"`;
     await putFile(node, configFile, withHookState((await readFile(node, configFile)) ?? '', records));
   }
 
-  /** What the agents on a machine need to report: pi's extension file, and for codex the hook, its entries in
-   *  hooks.json, and the trust written into its config file. */
+  /** Whether a machine has the tool a file of ours belongs to: one without it is left alone. */
+  async function hasTool(node: MachineConnection, home: string, name: string) {
+    return (await node.fs.stat(posix.join(home, name)).catch(() => null))?.isDirectory === true;
+  }
+
+  /** The files the agents on a machine load, brought to what this plugin ships: a machine that lost one, or kept
+   *  one from an older plugin, gets it back before the next session reads it. */
+  async function syncIntegrations(node: MachineConnection, home: string) {
+    if (await hasTool(node, home, '.pi')) {
+      await putFile(node, posix.join(home, '.pi/agent/extensions/wangcai-agent-state.ts'), readFileSync(join(__dirname, 'integrations/pi-agent-state.ts'), 'utf8'));
+    }
+    if (await hasTool(node, home, '.codex')) {
+      await putFile(node, posix.join(home, '.codex/wangcai-agent-state.sh'), readFileSync(join(__dirname, 'integrations/codex-agent-state.sh'), 'utf8'));
+    }
+  }
+
+  /** What the agents on a machine need to report: their files, and for codex the entries and trust that run one. */
   async function installAgents(machineId: string, node: MachineConnection) {
     if (installed.has(machineId)) return;
     const home = await homeOf(machineId, node);
     if (!home) return;
-    // A machine without the tool is left alone: there is nothing there to load this.
-    const present = async (name: string) => (await node.fs.stat(posix.join(home, name)).catch(() => null))?.isDirectory === true;
-    if (await present('.pi')) {
-      await putFile(node, posix.join(home, '.pi/agent/extensions/wangcai-agent-state.ts'), readFileSync(join(__dirname, 'integrations/pi-agent-state.ts'), 'utf8'));
-    }
-    if (await present('.codex')) {
-      await installCodexHooks(home, node, readFileSync(join(__dirname, 'integrations/codex-agent-state.sh'), 'utf8'));
-    }
+    await syncIntegrations(node, home);
+    if (await hasTool(node, home, '.codex')) await installCodexHooks(home, node);
     installed.add(machineId);
   }
 

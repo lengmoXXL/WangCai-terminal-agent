@@ -55,6 +55,14 @@ test('the agent integrations land on the machine, and what they report reaches t
     assert.deepEqual(commands('SessionStart'), [`/bin/sh '${hookPath}' clear`]);
     assert.deepEqual(commands('UserPromptSubmit'), [`/bin/sh '${hookPath}' working`]);
     assert.deepEqual(commands('Stop'), [foreign, `/bin/sh '${hookPath}' finished`], 'the entry another tool wrote is kept');
+    // A machine that lost those files, or kept them from an older plugin, gets them back before a session reads them.
+    writeFileSync(extensionPath, '// from an older plugin\n');
+    writeFileSync(hookPath, 'echo stale\n');
+    await createWorkspace(page);
+    await page.waitForFunction(() => document.querySelectorAll('[aria-label="工作区"] [role=tab]').length === 2);
+    assert.equal(readFileSync(extensionPath, 'utf8'), shipped('pi-agent-state.ts'), 'a session brings the extension up to what this plugin ships');
+    assert.equal(readFileSync(hookPath, 'utf8'), shipped('codex-agent-state.sh'), 'and the hook codex runs');
+
     // Codex runs a hook only once it has recorded trust for it, so the records are written with the entries.
     const configFile = join(home, '.codex/config.toml');
     const storedConfig = readFileSync(configFile, 'utf8');
