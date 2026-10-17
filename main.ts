@@ -63,10 +63,14 @@ export async function activate(context: MainContext) {
   // What each workspace's agent last said it was doing, and the directory on a machine it says it in.
   const agentStates = new Map<string, WorkspaceStatus>();
   const roots = new Map<string, string>();
-  // The machines this run of the app has already taken care of: a watch on the directory above, and the
-  // integrations their agents load. A machine that reconnects keeps both, so neither is set up twice.
-  const watching = new Set<string>();
+  // The watch armed on each machine's report directory, and the machines whose integrations are in place.
+  const watching = new Map<string, () => void>();
   const installed = new Set<string>();
+  // A machine that goes away takes its watch with it; what is left has to be let go when the plugin stops.
+  handlers.push(() => {
+    for (const unwatch of watching.values()) unwatch();
+    watching.clear();
+  });
 
   if (existsSync(path)) {
     const stored = JSON.parse(readFileSync(path, 'utf8')) as { workspaces: Workspace[] };
@@ -314,9 +318,11 @@ export async function activate(context: MainContext) {
     return root;
   }
 
-  /** Arms a machine's report directory: what it holds now is read, and a watch keeps every later write in step. */
+  /** Arms a machine's report directory: what the files there hold is what its rows show, now and after every
+   *  write the watch reports. A machine that comes back is armed and read again, since its watch died with it. */
   async function watchAgentStates(machineId: string, node: MachineConnection) {
-    if (watching.has(machineId)) return;
+    watching.get(machineId)?.();
+    watching.delete(machineId);
     const root = await agentRoot(machineId, node);
     if (!root) return;
     const update = async (path: string) => {
@@ -332,8 +338,7 @@ export async function activate(context: MainContext) {
       for (const path of [...changes.created, ...changes.modified, ...changes.removed]) void update(path);
     }).catch(() => undefined);
     if (!unwatch) return;
-    watching.add(machineId);
-    handlers.push(unwatch);
+    watching.set(machineId, unwatch);
     // A machine that kept reporting while the app was away: what it wrote is where its rows start.
     for (const entry of await node.fs.readDirectory(root).catch(() => [])) void update(posix.join(root, entry.name));
   }
