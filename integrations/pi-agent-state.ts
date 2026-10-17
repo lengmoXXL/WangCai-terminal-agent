@@ -18,8 +18,13 @@ type AgentState = 'working' | 'finished';
 
 export default function (pi) {
   if (!statePath) return;
-  // A report is a word in that file, and no report is no file at all.
+  // A report is a word in that file, and no report is no file at all. What the file already holds is not
+  // written again, since a tool call reports the state its run is already in.
+  let written: string | undefined;
   const report = (state?: AgentState) => {
+    const next = state ?? '';
+    if (next === written) return;
+    written = next;
     try {
       if (state === undefined) rmSync(statePath, { force: true });
       else writeFileSync(statePath, `${state}\n`);
@@ -31,10 +36,24 @@ export default function (pi) {
   // Only the session someone is looking at: a subagent runs headless and shares this environment. Each event is
   // asked, because an extension pi picks up after a session began never sees that session's start.
   const shown = (ctx) => ctx?.mode === 'tui';
+  // A run that asked for tools has not finished: it ends, the tools run, and the next run reads what they
+  // returned, so pi settling between them is not the end of the work.
+  let tools = 0;
   // A session that starts has nothing running in it yet, whatever the run before left behind.
   pi.on('session_start', (_event, ctx) => { if (shown(ctx)) report(); });
-  pi.on('agent_start', (_event, ctx) => { if (shown(ctx)) report('working'); });
-  pi.on('agent_settled', (_event, ctx) => { if (shown(ctx) && ctx?.isIdle?.() === true) report('finished'); });
+  pi.on('agent_start', (_event, ctx) => {
+    if (!shown(ctx)) return;
+    tools = 0;
+    report('working');
+  });
+  pi.on('tool_call', (_event, ctx) => {
+    if (!shown(ctx)) return;
+    tools += 1;
+    report('working');
+  });
+  pi.on('agent_settled', (_event, ctx) => {
+    if (shown(ctx) && ctx?.isIdle?.() === true && tools === 0) report('finished');
+  });
   // pi is going away, so nothing is running in the workspace any more.
   pi.on('session_shutdown', (_event, ctx) => { if (shown(ctx)) report(); });
 }
