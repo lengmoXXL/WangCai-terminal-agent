@@ -120,20 +120,25 @@ test('the pi integration reports two states, and nothing at all for an idle row'
     // A subagent is headless and shares this environment: nothing it does may reach the file.
     let fire = load();
     fire('session_start', { mode: 'rpc' });
-    fire('agent_start', {});
-    fire('agent_settled', { isIdle: () => true });
+    fire('agent_start', { mode: 'rpc' });
+    fire('agent_settled', { mode: 'rpc', isIdle: () => true });
     assert.equal(written(), undefined, 'a session pi did not open reports nothing');
+
+    // pi can pick an extension up after a session began, and that session never reports its start.
+    fire = load();
+    fire('agent_start', { mode: 'tui' });
+    assert.equal(written(), 'working\n', 'a run reports even when no start came before it');
 
     fire = load();
     fire('session_start', { mode: 'tui' });
     assert.equal(written(), undefined, 'a session that starts leaves no report, which the app draws as idle');
-    fire('agent_start', {});
+    fire('agent_start', { mode: 'tui' });
     assert.equal(written(), 'working\n');
-    fire('agent_settled', { isIdle: () => false });
+    fire('agent_settled', { mode: 'tui', isIdle: () => false });
     assert.equal(written(), 'working\n', 'a settle that is not idle is not the end of a run');
-    fire('agent_settled', { isIdle: () => true });
+    fire('agent_settled', { mode: 'tui', isIdle: () => true });
     assert.equal(written(), 'finished\n');
-    fire('session_shutdown', {});
+    fire('session_shutdown', { mode: 'tui' });
     assert.equal(written(), undefined, 'a session that ends leaves nothing behind');
 
     // A report a previous app run left on the machine is cleared by the session that starts now.

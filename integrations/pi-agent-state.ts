@@ -28,16 +28,13 @@ export default function (pi) {
     }
   };
 
-  // Only the session someone is looking at: a subagent runs headless and shares this environment.
-  let root = false;
-  pi.on('session_start', (_event, ctx) => {
-    if (ctx?.mode !== 'tui') return;
-    root = true;
-    // A session that starts has nothing running in it yet, whatever the run before left behind.
-    report();
-  });
-  pi.on('agent_start', () => { if (root) report('working'); });
-  pi.on('agent_settled', (_event, ctx) => { if (root && ctx?.isIdle?.() === true) report('finished'); });
+  // Only the session someone is looking at: a subagent runs headless and shares this environment. Each event is
+  // asked, because an extension pi picks up after a session began never sees that session's start.
+  const shown = (ctx) => ctx?.mode === 'tui';
+  // A session that starts has nothing running in it yet, whatever the run before left behind.
+  pi.on('session_start', (_event, ctx) => { if (shown(ctx)) report(); });
+  pi.on('agent_start', (_event, ctx) => { if (shown(ctx)) report('working'); });
+  pi.on('agent_settled', (_event, ctx) => { if (shown(ctx) && ctx?.isIdle?.() === true) report('finished'); });
   // pi is going away, so nothing is running in the workspace any more.
-  pi.on('session_shutdown', () => { if (root) report(); });
+  pi.on('session_shutdown', (_event, ctx) => { if (shown(ctx)) report(); });
 }
