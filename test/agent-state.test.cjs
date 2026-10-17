@@ -163,6 +163,15 @@ test('the pi integration reports two states, and nothing at all for an idle row'
     fire = load();
     fire('session_start', { mode: 'tui' });
     assert.equal(written(), undefined);
+
+    // An ending session only takes back what it wrote: the report may belong to another session in that workspace.
+    writeFileSync(statePath, 'working\n');
+    fire = load();
+    fire('session_shutdown', { mode: 'tui' });
+    assert.equal(written(), 'working\n', 'a session that reported nothing leaves the report it found');
+    fire('agent_start', { mode: 'tui' });
+    fire('session_shutdown', { mode: 'tui' });
+    assert.equal(written(), undefined, 'a session that reported takes its report back when it ends');
   } finally {
     delete process.env.WANGCAI_AGENT_STATE;
     rmSync(home, { recursive: true, force: true });

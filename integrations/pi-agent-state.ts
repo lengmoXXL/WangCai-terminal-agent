@@ -66,9 +66,11 @@ export default function (pi) {
       report('finished');
     }, 600);
   });
-  // pi is going away, so nothing is running in the workspace any more.
-  pi.on('session_shutdown', (_event, ctx) => {
+  // pi is going away, so nothing is running in the workspace any more: a session takes back what it wrote, and
+  // leaves a report another session in that workspace may own. The context of an ending session is not asked,
+  // since it need not say which session it was.
+  pi.on('session_shutdown', () => {
     cancel();
-    if (shown(ctx)) report();
+    if (written !== undefined) report();
   });
 }
