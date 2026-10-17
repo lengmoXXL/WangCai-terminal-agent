@@ -55,15 +55,30 @@ test('a wrapped path is one line to the links, and a rewrap while a look is out 
 
   const wrapped = lineBuffer(printed, 24);
   let looks = 0;
-  registerFileLinks(wrapped.term, {
+  const clicks = [];
+  const handle = registerFileLinks(wrapped.term, {
     resolve: async (paths) => { looks++; return Object.fromEntries(paths.map((one) => [one, one])); },
-    activate: () => {},
+    activate: (one) => clicks.push(one),
   });
   for (const row of [1, 2, 3]) {
     const found = await wrapped.links(row);
     assert.deepEqual(found.map((one) => one.text), [link], `row ${row} of the wrapped path is a link`);
   }
   assert.equal(looks, 1, 'the wrapped line is looked at once, however many rows it covers');
+  // The click opens the path once it holds Command: on its own it opens nothing.
+  const [first] = await wrapped.links(2);
+  first.activate({ metaKey: false });
+  assert.deepEqual(clicks, []);
+  first.activate({ metaKey: true });
+  assert.deepEqual(clicks, [path]);
+
+  assert.deepEqual(first.decorations, { underline: false, pointerCursor: false }, 'a link waits for Command');
+  first.hover();
+  handle.setCommand(true);
+  assert.deepEqual(first.decorations, { underline: true, pointerCursor: true }, 'the key shows the link under the pointer');
+  assert.deepEqual((await wrapped.links(2))[0].decorations, { underline: true, pointerCursor: true }, 'and a line read while it is held');
+  handle.setCommand(false);
+  assert.deepEqual(first.decorations, { underline: false, pointerCursor: false }, 'releasing it hides the link again');
 
   // The look is answered a resize late, which is what a slow machine makes of the same line.
   const second = lineBuffer(printed, 24);
@@ -121,13 +136,20 @@ const point = (page, row, at) => page.evaluate(([row, at]) => {
   throw new Error(`row ${row} is shorter than ${at + 1} characters`);
 }, [row, at]);
 
-/** Puts the pointer on one character of a row, after leaving the terminal so the line is read again. */
+/** Puts the pointer on one character of a row, after leaving the terminal so the line is read again.
+    A link does not always mark the screen, so this waits the look out rather than for a mark to appear. */
 async function hover(page, row, at) {
   const [x, y] = await point(page, row, at);
   await page.mouse.move(0, 0);
   await page.mouse.move(x, y);
-  await page.waitForFunction(() => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div span')].some((span) => span.style.textDecoration === 'underline'));
+  await page.waitForTimeout(500);
 }
+
+/** Waits until every one of these rows shows a link. */
+const revealed = (page, rows) => page.waitForFunction((rows) => {
+  const under = [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')].map((row) => [...row.querySelectorAll('span')].some((span) => span.style.textDecoration === 'underline'));
+  return rows.every((at) => under[at]);
+}, rows);
 
 test('a path the terminal wrapped is one link on every row it covers, and the wrap follows a resize', { timeout: 180000 }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'wangcai-links-')));
@@ -152,11 +174,13 @@ test('a path the terminal wrapped is one link on every row it covers, and the wr
 
     const wrapped = await printedBlock(page, path);
     assert.ok(wrapped.last > wrapped.first, 'the printed path wraps');
-    for (const row of covers(wrapped)) {
-      await hover(page, row, 1);
-      assert.deepEqual(await linked(page), covers(wrapped), `hovering row ${row} links every row of the path`);
-      assert.equal((await screen(page)).links.join(''), path, `hovering row ${row} links the path and nothing else`);
-    }
+    // The pointer finds the path as a link on every row the wrap put it on.
+    for (const row of covers(wrapped)) await hover(page, row, 1);
+    assert.deepEqual(await linked(page), [], 'the path stays text while Command is not held');
+    await page.keyboard.down('Meta');
+    await revealed(page, covers(wrapped));
+    assert.deepEqual(await linked(page), covers(wrapped), 'Command reveals the link on every row of the path');
+    assert.equal((await screen(page)).links.join(''), path, 'the link is the whole path');
 
     // A resize rewraps the buffer: the link has to cover the rows the path has now, not the old ones.
     await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(560, 800));
@@ -165,9 +189,11 @@ test('a path the terminal wrapped is one link on every row it covers, and the wr
     assert.notEqual(covers(rewrapped).length, covers(wrapped).length, 'the resize changes how the path wraps');
     for (const row of covers(rewrapped)) {
       await hover(page, row, 1);
+      await revealed(page, covers(rewrapped));
       assert.deepEqual(await linked(page), covers(rewrapped), `hovering row ${row} after the resize links the rows the path has now`);
       assert.equal((await screen(page)).links.join(''), path, `hovering row ${row} after the resize links the path and nothing else`);
     }
+    await page.keyboard.up('Meta');
   } finally {
     await desktop?.close();
     try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
@@ -195,12 +221,16 @@ test('a printed web address is a link on every row it covers, and the app opens 
 
     const wrapped = await printedBlock(page, address);
     assert.ok(wrapped.last > wrapped.first, 'the printed address wraps');
+
     // The pointer finds the address as a link on every row the wrap put it on.
     for (const row of covers(wrapped)) await hover(page, row, 1);
+    await revealed(page, covers(wrapped));
     assert.deepEqual(await linked(page), covers(wrapped), 'the address is one link on every row it covers');
     assert.equal((await screen(page)).links.join(''), address, 'the link is the whole address');
 
+    // The click that holds Command is what opens the address.
     const [x, y] = await point(page, wrapped.first, 1);
+    await page.keyboard.down('Meta');
     await page.mouse.click(x, y);
     let opened;
     for (let attempt = 0; attempt < 50 && !opened; attempt++) {
@@ -208,6 +238,12 @@ test('a printed web address is a link on every row it covers, and the app opens 
       if (!opened) await page.waitForTimeout(100);
     }
     assert.equal(opened, address, 'the app is handed the address');
+
+    await page.keyboard.up('Meta');
+    await desktop.evaluate(() => { globalThis.opened = undefined; });
+    await page.mouse.click(x, y);
+    await page.waitForTimeout(500);
+    assert.equal(await desktop.evaluate(() => globalThis.opened), undefined, 'a click that holds no Command opens nothing');
   } finally {
     await desktop?.close();
     try { execFileSync(join(app, 'wangcaicli/dist/debug/wangcai'), ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
