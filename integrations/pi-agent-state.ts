@@ -36,24 +36,39 @@ export default function (pi) {
   // Only the session someone is looking at: a subagent runs headless and shares this environment. Each event is
   // asked, because an extension pi picks up after a session began never sees that session's start.
   const shown = (ctx) => ctx?.mode === 'tui';
-  // A run that asked for tools has not finished: it ends, the tools run, and the next run reads what they
-  // returned, so pi settling between them is not the end of the work.
-  let tools = 0;
-  // A session that starts has nothing running in it yet, whatever the run before left behind.
-  pi.on('session_start', (_event, ctx) => { if (shown(ctx)) report(); });
+  // pi settles between a run and the tools it asked for, so an end is only reported when nothing follows it: a
+  // run that carries on cancels the wait, and one that is over lets it stand.
+  let soon: ReturnType<typeof setTimeout> | undefined;
+  const cancel = () => {
+    if (soon !== undefined) clearTimeout(soon);
+    soon = undefined;
+  };
+  // A session that starts has nothing running in it yet, unless pi is only reloading while a run goes on.
+  pi.on('session_start', (_event, ctx) => {
+    if (!shown(ctx)) return;
+    report(ctx?.isIdle?.() === false ? 'working' : undefined);
+  });
   pi.on('agent_start', (_event, ctx) => {
     if (!shown(ctx)) return;
-    tools = 0;
+    cancel();
     report('working');
   });
   pi.on('tool_call', (_event, ctx) => {
     if (!shown(ctx)) return;
-    tools += 1;
+    cancel();
     report('working');
   });
   pi.on('agent_settled', (_event, ctx) => {
-    if (shown(ctx) && ctx?.isIdle?.() === true && tools === 0) report('finished');
+    if (!shown(ctx) || ctx?.isIdle?.() !== true) return;
+    cancel();
+    soon = setTimeout(() => {
+      soon = undefined;
+      report('finished');
+    }, 600);
   });
   // pi is going away, so nothing is running in the workspace any more.
-  pi.on('session_shutdown', (_event, ctx) => { if (shown(ctx)) report(); });
+  pi.on('session_shutdown', (_event, ctx) => {
+    cancel();
+    if (shown(ctx)) report();
+  });
 }

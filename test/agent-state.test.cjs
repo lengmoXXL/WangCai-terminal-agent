@@ -142,14 +142,18 @@ test('the pi integration reports two states, and nothing at all for an idle row'
     assert.equal(written(), undefined, 'a session that starts leaves no report, which the app draws as idle');
     fire('agent_start', { mode: 'tui' });
     assert.equal(written(), 'working\n');
+    fire('session_start', { mode: 'tui', isIdle: () => false });
+    assert.equal(written(), 'working\n', 'a reload in the middle of a run keeps it working');
     fire('agent_settled', { mode: 'tui', isIdle: () => false });
     assert.equal(written(), 'working\n', 'a settle that is not idle is not the end of a run');
-    // A run that asked for a tool is not over when pi settles: the tools run, and the next run reads them.
-    fire('tool_call', { mode: 'tui' });
+    // A run that asked for a tool is not over when pi settles: the tool call comes right after and cancels it.
     fire('agent_settled', { mode: 'tui', isIdle: () => true });
+    fire('tool_call', { mode: 'tui' });
+    await new Promise((rest) => setTimeout(rest, 700));
     assert.equal(written(), 'working\n', 'a run with a tool to run is not finished');
     fire('agent_start', { mode: 'tui' });
     fire('agent_settled', { mode: 'tui', isIdle: () => true });
+    await new Promise((rest) => setTimeout(rest, 700));
     assert.equal(written(), 'finished\n');
     fire('session_shutdown', { mode: 'tui' });
     assert.equal(written(), undefined, 'a session that ends leaves nothing behind');
