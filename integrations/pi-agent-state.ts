@@ -18,10 +18,20 @@ type AgentState = 'working' | 'finished';
 
 export default function (pi) {
   if (!statePath) return;
-  // A report is a word in that file, and no report is no file at all. What the file already holds is not
-  // written again, since a tool call reports the state its run is already in.
+  // pi settles between a run and the tools it asked for, so an end waits to see whether anything follows it: a
+  // later report, tool call, another settle, or the session ending cancels that wait.
+  let pendingEnd: ReturnType<typeof setTimeout> | undefined;
+  const cancel = () => {
+    clearTimeout(pendingEnd);
+    pendingEnd = undefined;
+  };
+
+  // What the file already holds is not written again, since a tool call reports the state its run is already in.
+  // Nothing written yet is not the same as a report taken away: a session that starts has to clear what an older
+  // run left behind.
   let written: string | undefined;
   const report = (state?: AgentState) => {
+    cancel();
     const next = state ?? '';
     if (next === written) return;
     written = next;
@@ -33,42 +43,30 @@ export default function (pi) {
     }
   };
 
-  // Only the session someone is looking at: a subagent runs headless and shares this environment. Each event is
-  // asked, because an extension pi picks up after a session began never sees that session's start.
+  // Only the session someone is looking at: a subagent runs headless and shares this environment. A session's
+  // start and the events of its runs ask this rather than remembering an answer, since an extension pi picks up
+  // after a session began never sees its start.
   const shown = (ctx) => ctx?.mode === 'tui';
-  // pi settles between a run and the tools it asked for, so an end is only reported when nothing follows it: a
-  // run that carries on cancels the wait, and one that is over lets it stand.
-  let soon: ReturnType<typeof setTimeout> | undefined;
-  const cancel = () => {
-    if (soon !== undefined) clearTimeout(soon);
-    soon = undefined;
-  };
   // A session that starts has nothing running in it yet, unless pi is only reloading while a run goes on.
   pi.on('session_start', (_event, ctx) => {
     if (!shown(ctx)) return;
     report(ctx?.isIdle?.() === false ? 'working' : undefined);
   });
-  pi.on('agent_start', (_event, ctx) => {
+  // A run that starts and a run whose tools have started are one report: the session is working.
+  const working = (_event, ctx) => {
     if (!shown(ctx)) return;
-    cancel();
     report('working');
-  });
-  pi.on('tool_call', (_event, ctx) => {
-    if (!shown(ctx)) return;
-    cancel();
-    report('working');
-  });
+  };
+  pi.on('agent_start', working);
+  pi.on('tool_call', working);
   pi.on('agent_settled', (_event, ctx) => {
     if (!shown(ctx) || ctx?.isIdle?.() !== true) return;
     cancel();
-    soon = setTimeout(() => {
-      soon = undefined;
-      report('finished');
-    }, 600);
+    // The tools start a moment after the settle, so this window is long enough for them to show up.
+    pendingEnd = setTimeout(() => report('finished'), 600);
   });
-  // pi is going away, so nothing is running in the workspace any more: a session takes back what it wrote, and
-  // leaves a report another session in that workspace may own. The context of an ending session is not asked,
-  // since it need not say which session it was.
+  // pi is going away, so a session takes back the report it wrote, and leaves one another session in that
+  // workspace may own.
   pi.on('session_shutdown', () => {
     cancel();
     if (written !== undefined) report();
