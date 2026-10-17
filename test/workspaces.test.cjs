@@ -126,10 +126,16 @@ test('workspaces can be dragged into a new order', { timeout: 180000 }, async ()
     await settled(['alpha', 'beta', '~']);
     await run(page, 'cd gamma');
     await settled(['alpha', 'beta', 'gamma']);
-    await page.getByRole('tab', { name: 'beta' }).dragTo(page.getByRole('tab', { name: 'alpha' }), { targetPosition: { x: 40, y: 4 } });
+    // The list drops a row on a line between entries, so a row stands where the line it was dropped on is.
+    // A row is named for its workspace and the machine it runs on.
+    const row = (name) => page.getByRole('tab', { name });
+    const lineAt = (index) => page.locator(`.workspaces > :nth-child(${index + 1})`);
+    const lineBeside = async (name, step) => lineAt(await row(name).evaluate((element, step) => [...element.parentElement.children].indexOf(element) + step, step));
+    const onLine = { x: 40, y: 0 };
+    await row('beta').dragTo(await lineBeside('alpha', -1), { targetPosition: onLine });
     await settled(['beta', 'alpha', 'gamma']);
-    // dropping a row below a row ahead of it moves it after that row
-    await page.getByRole('tab', { name: 'gamma' }).dragTo(page.getByRole('tab', { name: 'beta' }), { targetPosition: { x: 40, y: 20 } });
+    // the line under a row ahead of it moves it after that row
+    await row('gamma').dragTo(await lineBeside('beta', 1), { targetPosition: onLine });
     await settled(['beta', 'gamma', 'alpha']);
     await desktop.close(); desktop = undefined;
     await open();
