@@ -211,7 +211,7 @@ test('a printed web address is a link on every row it covers, and the app opens 
     writeInit(home);
     desktop = await launchApp(home, env);
     // The window hands a link to the system browser: the test takes that call instead.
-    await desktop.evaluate(({ ipcMain }) => { ipcMain.removeHandler('wangcai:open'); ipcMain.handle('wangcai:open', (_event, url) => { globalThis.opened = url; }); });
+    await desktop.evaluate(({ shell }) => { shell.openExternal = async (url) => { globalThis.opened = url; }; });
     const page = await desktop.firstWindow();
     await waitForShell(page);
     await createWorkspace(page);

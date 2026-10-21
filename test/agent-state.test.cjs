@@ -100,7 +100,7 @@ test('the agent integrations land on the machine, and what they report reaches t
     assert.equal(existsSync(reportPath), false, 'a cleared row leaves no report behind');
     report('finished');
     await drawn('finished');
-    await page.evaluate((id) => window.wangcai.request('terminal-agent', 'workspace-close', { id }), id);
+    await page.evaluate((id) => window.wangcai.call('request', 'terminal-agent', 'workspace-close', { id }), id);
     assert.equal(existsSync(reportPath), false, 'a closed workspace leaves no report behind');
   } finally {
     await desktop?.close();

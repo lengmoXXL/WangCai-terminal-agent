@@ -36,8 +36,8 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
     `);
     let page = await launch();
     await waitForShell(page);
-    assert.deepEqual(await page.evaluate(async () => (await window.wangcai.plugins()).map((plugin) => plugin.id)), ['terminal', 'terminal-agent']);
-    assert.deepEqual(await page.evaluate(async () => (await window.wangcai.plugins()).map(({ id, config }) => [id, config])), [
+    assert.deepEqual(await page.evaluate(async () => (await window.wangcai.call('plugins')).map((plugin) => plugin.id)), ['terminal', 'terminal-agent']);
+    assert.deepEqual(await page.evaluate(async () => (await window.wangcai.call('plugins')).map(({ id, config }) => [id, config])), [
       ['terminal', { font: { family: 'Config Mono', size: 20, lineHeight: 1.5 } }],
       ['terminal-agent', { font: { family: 'Config UI Font', size: 13, lineHeight: 1 }, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }], images: { maxCount: 100 } }],
     ]);
@@ -73,7 +73,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
     await page.waitForFunction(() => document.querySelector('#root').textContent.trim());
     assert.match(await page.locator('#root').innerText(), /未安装插件/);
     assert.deepEqual(await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, document.documentElement.style.colorScheme]), ['rgb(18, 19, 20)', 'dark']);
-    assert.deepEqual(await page.evaluate(async () => Object.keys(await window.wangcai.config()).sort()), ['theme']);
+    assert.deepEqual(await page.evaluate(async () => Object.keys(await window.wangcai.call('config')).sort()), ['theme']);
     await desktop.close(); desktop = undefined;
   } finally {
     if (desktop) await desktop.close().catch(() => {});

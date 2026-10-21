@@ -49,7 +49,7 @@ test('local terminal, reconnect and relaunch', { timeout: 180000 }, async () => 
     assert.deepEqual(terminal.bar, ['10px', '10px'], 'the terminal scrollbar is 10px wide');
     assert.ok(terminal.overlap <= 0, `the terminal grid runs ${terminal.overlap}px under the viewport scrollbar`);
     assert.deepEqual(terminal.outline, [18, 19, 20, 255], 'the overview ruler outline hides in the terminal background');
-    const workspaces = (await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces;
+    const workspaces = (await page.evaluate(() => window.wangcai.call('request', 'terminal-agent', 'config'))).workspaces;
     assert.equal(workspaces.length, 1);
     assert.equal(await localTabs.getByRole('tab').count(), 1);
     await createWorkspace(page);
@@ -75,12 +75,12 @@ test('local terminal, reconnect and relaunch', { timeout: 180000 }, async () => 
     page = await launch();
     await page.getByRole('tablist', { name: '工作区', exact: true }).getByRole('tab').filter({ hasText: '~' }).waitFor();
     await page.waitForFunction(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent.includes('WORKSPACE_success'));
-    assert.equal((await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces[0].sessionId, workspaces[0].sessionId);
+    assert.equal((await page.evaluate(() => window.wangcai.call('request', 'terminal-agent', 'config'))).workspaces[0].sessionId, workspaces[0].sessionId);
     await page.getByRole('tab', { name: '文件', exact: true }).waitFor();
     await page.getByRole('tab', { name: '~' }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: '关闭工作区', exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll('.workspaces [role=tab]').length === 0);
-    assert.deepEqual((await page.evaluate(() => window.wangcai.request('terminal-agent', 'config'))).workspaces, []);
+    assert.deepEqual((await page.evaluate(() => window.wangcai.call('request', 'terminal-agent', 'config'))).workspaces, []);
     await desktop.close(); desktop = undefined;
     const { resolveConfig } = await import(pathToFileURL(require.resolve('electron-vite', { paths: [app] })).href);
     const { createServer } = await import(pathToFileURL(require.resolve('vite', { paths: [app] })).href);
