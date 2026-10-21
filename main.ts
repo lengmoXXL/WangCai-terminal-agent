@@ -173,23 +173,30 @@ export async function activate(context: MainContext) {
     });
   }
 
+  // A workspace list and an agent's report are two kinds of change: the rows themselves, and what one row's
+  // agent last said it was doing. Only the first is worth every listener pulling the list again, so the second
+  // goes out on a topic of its own. Status is left out of this comparison for the same reason.
+  const shapeOf = (list: WorkspaceRow[]) => JSON.stringify(list.map(({ status, ...rest }) => rest));
   let announced = '';
+  let announcedFront = '';
   // The window draws the list from this, and the tab views follow whichever workspace is in front.
   async function announce() {
     context.ui.publish('config', { workspaces, active });
     const list = rows();
-    // A listener acts on a change; republishing a list it already has only sends it round again.
-    const current = JSON.stringify(list);
-    if (current !== announced) {
-      announced = current;
+    const shape = shapeOf(list);
+    if (shape !== announced) {
+      announced = shape;
       await context.global.publish('workspaces', list);
     }
     const workspace = workspaces.find((item) => item.id === active);
     const machine = workspace && machines.find((machine) => machine.id === workspace.machineId);
     const session = workspace && sessionFor(workspace);
-    // A tab view that opens later asks for this again, so it is answered every time it is asked.
     const front: WorkspaceActive | null = machine && workspace && session?.exit_code === null ? { machine, sessionId: session.id, workspaceId: workspace.id } : null;
-    await context.global.publish('workspace:active', front);
+    const frontShape = JSON.stringify(front);
+    if (frontShape !== announcedFront) {
+      announcedFront = frontShape;
+      await context.global.publish('workspace:active', front);
+    }
   }
 
   function hostOf(sessionId: string) {
@@ -281,7 +288,11 @@ export async function activate(context: MainContext) {
     save();
     void announce();
   }));
-  handlers.push(context.global.subscribe('workspace:query', () => { void announce(); }));
+  handlers.push(context.global.subscribe('workspace:query', () => {
+    // A tab that opens later asks for what it missed: this answer goes out even when nothing moved since.
+    announcedFront = '';
+    void announce();
+  }));
   handlers.push(context.ui.handle('address', ({ machineId }: { machineId: string }) => {
     const node = connections.get(machineId);
     if (!node) throw new Error('Machine is not connected');
@@ -339,7 +350,7 @@ export async function activate(context: MainContext) {
       const status: WorkspaceStatus = written === 'working' || written === 'finished' ? written : 'idle';
       if (status === stateOf(workspace.id)) return;
       agentStates.set(workspace.id, status);
-      await announce();
+      await context.global.publish('workspace-status', { id: workspace.id, status });
     };
     const unwatch = await node.fs.watch(root, { recursive: true }, (changes) => {
       for (const path of [...changes.created, ...changes.modified, ...changes.removed]) void update(path);
