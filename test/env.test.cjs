@@ -22,6 +22,7 @@ test('a node started again carries what init.ts asks for, and its terminals have
     };
   `);
   const state = join(home, '.local/share/wangcai/server.json');
+  const stored = () => JSON.parse(readFileSync(join(home, '.local/share/wangcai/data/terminal-agent/config.json'), 'utf8')).workspaces[0];
   const nodePid = () => { try { return JSON.parse(readFileSync(state, 'utf8')).pid; } catch { return undefined; } };
   const printed = () => page.evaluate(() => document.querySelector('.terminal-pane.active .xterm-rows')?.textContent ?? '');
   // The line is typed until the screen shows what it asked: a pane whose shell is still attaching drops input.
@@ -47,6 +48,7 @@ test('a node started again carries what init.ts asks for, and its terminals have
     await shows(`ASKED_first_${home}/asked`);
     const first = nodePid();
     assert.equal(typeof first, 'number', 'a workspace opened a node of its own');
+    const workspace = stored();
     await desktop.close(); desktop = undefined;
 
     // What a node holds is what it was started with, so a new environment is a new node: this one is stopped by
@@ -60,6 +62,10 @@ test('a node started again carries what init.ts asks for, and its terminals have
     // The terminal the stopped node held is gone with it, so the workspace opens another one on the new node.
     await page.locator('.terminal-pane.active .xterm-helper-textarea').waitFor({ timeout: 60000 });
     await shows(`ASKED_second_${home}/asked`);
+    // The workspace the run before left is the one that opened again, with a terminal the new node started.
+    assert.equal(stored().id, workspace.id, 'the same workspace');
+    assert.equal(stored().cwd, workspace.cwd, 'the shell opens where the workspace was');
+    assert.notEqual(stored().sessionId, workspace.sessionId, 'a terminal of the new node, not the one of the old');
   } finally {
     await desktop?.close().catch(() => {});
     try { execFileSync(wangcai, ['server', 'stop'], { env, stdio: 'ignore', timeout: 15000 }); } catch {}
