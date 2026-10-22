@@ -141,6 +141,11 @@ export async function activate(context: MainContext) {
     return result;
   }
 
+  /** What the sidebar calls a workspace: the name it was given, or where it sits in the list. */
+  function nameOf(workspace: Workspace) {
+    return workspace.name ?? `工作区 ${workspaces.indexOf(workspace) + 1}`;
+  }
+
   /** A workspace needs a live terminal on a connected machine; a dead or missing one is replaced. */
   async function ensure(workspace: Workspace) {
     const node = connections.get(workspace.machineId)!;
@@ -153,7 +158,7 @@ export async function activate(context: MainContext) {
     if (home) await syncIntegrations(node, home);
     const root = await agentRoot(workspace.machineId, node);
     const env = root ? { WANGCAI_AGENT_STATE: reportFile(root, workspace.id) } : undefined;
-    workspace.sessionId = (await node.pty.create({ rows: 24, cols: 80 }, { cwd, env })).id;
+    workspace.sessionId = (await node.pty.create({ rows: 24, cols: 80 }, { cwd, env, label: `${nameOf(workspace)} - agent` })).id;
   }
 
   function sessionFor(workspace: Workspace) {
@@ -161,11 +166,11 @@ export async function activate(context: MainContext) {
   }
 
   function rows(): WorkspaceRow[] {
-    return workspaces.map((workspace, index) => {
+    return workspaces.map((workspace) => {
       const session = sessionFor(workspace);
       return {
         id: workspace.id,
-        label: workspace.name ?? `工作区 ${index + 1}`,
+        label: nameOf(workspace),
         machine: machines.find((machine) => machine.id === workspace.machineId)!.name,
         running: session?.exit_code === null,
         status: stateOf(workspace.id),
@@ -191,7 +196,9 @@ export async function activate(context: MainContext) {
     const workspace = workspaces.find((item) => item.id === active);
     const machine = workspace && machines.find((machine) => machine.id === workspace.machineId);
     const session = workspace && sessionFor(workspace);
-    const front: WorkspaceActive | null = machine && workspace && session?.exit_code === null ? { machine, sessionId: session.id, workspaceId: workspace.id } : null;
+    const front: WorkspaceActive | null = machine && workspace && session?.exit_code === null
+      ? { machine, sessionId: session.id, workspaceId: workspace.id, name: nameOf(workspace) }
+      : null;
     const frontShape = JSON.stringify(front);
     if (frontShape !== announcedFront) {
       announcedFront = frontShape;
