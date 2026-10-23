@@ -12,6 +12,7 @@ export interface WangcaiAPI {
   click(sessionId: string, location: Pick<FileClick, 'path' | 'line' | 'column'>): Promise<void>;
   config(): Promise<Config>;
   states(): Promise<MachineState[]>;
+  activity(sessionId: string): Promise<void>;
   selectWorkspace(id: string): Promise<void>;
   address(machineId: string): Promise<string>;
   resolve(sessionId: string, paths: string[]): Promise<Record<string, string>>;

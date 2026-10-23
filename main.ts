@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { MachineConnection, WorkspaceActive, WorkspaceRow, WorkspaceStatus } from '@lengmoxxl/sdk';
 import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { registerFilePaths } from './file-links/paths';
@@ -60,21 +60,29 @@ export async function activate(context: MainContext) {
   const states = new Map<string, MachineState>();
   const failures = new Map<string, string>();
   const handlers: (() => void)[] = [];
-  // What each workspace's agent last said it was doing, and the directory on a machine it says it in.
+  // What each workspace's terminal last showed. A workspace with no entry has said nothing yet.
   const agentStates = new Map<string, WorkspaceStatus>();
-  const roots = new Map<string, string>();
-  /** What a row shows: a workspace whose agent has said nothing is idle. */
   function stateOf(id: string) {
     return agentStates.get(id) ?? 'idle';
   }
-  // The watch armed on each machine's report directory, and the machines whose integrations are in place.
-  const watching = new Map<string, () => void>();
-  const installed = new Set<string>();
-  // The watches still armed when the plugin stops are let go here.
-  handlers.push(() => {
-    for (const unwatch of watching.values()) unwatch();
-    watching.clear();
-  });
+  // Two seconds without a report is a terminal that stopped: agent TUIs repaint while they work.
+  const QUIET = 2000;
+  const quietTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  function sawOutput(sessionId: string) {
+    const workspace = workspaces.find((item) => item.sessionId === sessionId);
+    if (!workspace) return;
+    clearTimeout(quietTimers.get(workspace.id));
+    quietTimers.set(workspace.id, setTimeout(() => {
+      quietTimers.delete(workspace.id);
+      setStatus(workspace.id, 'finished');
+    }, QUIET));
+    setStatus(workspace.id, 'working');
+  }
+  function setStatus(id: string, status: WorkspaceStatus) {
+    if (status === stateOf(id)) return;
+    agentStates.set(id, status);
+    void context.global.publish('workspace-status', { id, status });
+  }
 
   if (existsSync(path)) {
     const stored = JSON.parse(readFileSync(path, 'utf8')) as { workspaces: Workspace[] };
@@ -120,11 +128,6 @@ export async function activate(context: MainContext) {
           states.set(id, state);
           context.ui.publish('state', state);
           void announce();
-          if (value.status === 'connected') {
-            void watchAgentStates(id, node);
-            // A machine that cannot be set up still opens its terminals; its rows just say nothing.
-            void installAgents(id, node).catch((error: Error) => console.error('Cannot install the agent integrations:', error));
-          }
         });
         return { ...node.state, machineId: id };
       } catch (error) {
@@ -154,11 +157,7 @@ export async function activate(context: MainContext) {
     if (workspace.sessionId !== undefined) await node.pty.close(workspace.sessionId).catch(() => {});
     // A cwd that is not a directory fails the create outright.
     const cwd = workspace.cwd && (await node.fs.stat(workspace.cwd))?.isDirectory ? workspace.cwd : undefined;
-    const home = await homeOf(workspace.machineId, node);
-    if (home) await syncIntegrations(node, home);
-    const root = await agentRoot(workspace.machineId, node);
-    const env = root ? { WANGCAI_AGENT_STATE: reportFile(root, workspace.id) } : undefined;
-    workspace.sessionId = (await node.pty.create({ rows: 24, cols: 80 }, { cwd, env, label: `${nameOf(workspace)} - agent` })).id;
+    workspace.sessionId = (await node.pty.create({ rows: 24, cols: 80 }, { cwd, label: `${nameOf(workspace)} - agent` })).id;
   }
 
   function sessionFor(workspace: Workspace) {
@@ -178,9 +177,9 @@ export async function activate(context: MainContext) {
     });
   }
 
-  // A workspace list and an agent's report are two kinds of change: the rows themselves, and what one row's
-  // agent last said it was doing. Only the first is worth every listener pulling the list again, so the second
-  // goes out on a topic of its own. Status is left out of this comparison for the same reason.
+  // A workspace list and a terminal's report are two kinds of change: the rows themselves, and what one row's
+  // terminal last showed. Only the first is worth every listener pulling the list again, so the second goes out
+  // on a topic of its own. Status is left out of this comparison for the same reason.
   const shapeOf = (list: WorkspaceRow[]) => JSON.stringify(list.map(({ status, ...rest }) => rest));
   let announced = '';
   let announcedFront = '';
@@ -218,6 +217,7 @@ export async function activate(context: MainContext) {
   handlers.push(context.ui.handle('config', () => ({ workspaces, active })));
   handlers.push(context.ui.handle('workspaces', rows));
   handlers.push(context.ui.handle('states', () => [...states.values()]));
+  handlers.push(context.ui.handle('activity', ({ sessionId }: { sessionId: string }) => sawOutput(sessionId)));
   handlers.push(context.ui.handle('workspace-menu', () => machines.map((machine) => ({
     key: machine.id,
     label: machine.name,
@@ -267,9 +267,8 @@ export async function activate(context: MainContext) {
     }
     workspaces = workspaces.filter((item) => item.id !== id);
     agentStates.delete(id);
-    // The report its agent left on the machine goes when its workspace does.
-    const root = roots.get(workspace.machineId);
-    if (node && root) await shell(node, 'rm -f "$1"', reportFile(root, id)).catch(() => undefined);
+    clearTimeout(quietTimers.get(id));
+    quietTimers.delete(id);
     if (active === id) active = undefined;
     save();
     await announce();
@@ -324,191 +323,6 @@ export async function activate(context: MainContext) {
     return value;
   }
 
-  /** The directory a machine keeps its reports in, made once and kept. */
-  async function agentRoot(machineId: string, node: MachineConnection) {
-    const known = roots.get(machineId);
-    if (known) return known;
-    const home = await homeOf(machineId, node);
-    if (!home) return undefined;
-    const root = posix.join(home, '.local/share/wangcai/agent-state');
-    // A watch on a path that is not there yet reports nothing, so the directory is made before it is armed.
-    const made = await shell(node, 'mkdir -p "$1"', root).catch(() => undefined);
-    if (made?.code !== 0) return undefined;
-    roots.set(machineId, root);
-    return root;
-  }
-
-  /** The file a workspace's agent on that machine reports into, which the app reads back. */
-  function reportFile(root: string, id: string) {
-    return posix.join(root, id);
-  }
-
-  /** Arms a machine's report directory: what the files there hold is what its rows show, now and after every
-   *  write the watch reports. A machine that comes back is armed and read again, since its watch died with it. */
-  async function watchAgentStates(machineId: string, node: MachineConnection) {
-    watching.get(machineId)?.();
-    watching.delete(machineId);
-    const root = await agentRoot(machineId, node);
-    if (!root) return;
-    const update = async (path: string) => {
-      const workspace = workspaces.find((item) => item.machineId === machineId && item.id === posix.basename(path));
-      if (!workspace) return;
-      const written = await node.fs.readFile(path).then((data) => Buffer.from(data).toString().trim()).catch(() => '');
-      const status: WorkspaceStatus = written === 'working' || written === 'finished' ? written : 'idle';
-      if (status === stateOf(workspace.id)) return;
-      agentStates.set(workspace.id, status);
-      await context.global.publish('workspace-status', { id: workspace.id, status });
-    };
-    const unwatch = await node.fs.watch(root, { recursive: true }, (changes) => {
-      for (const path of [...changes.created, ...changes.modified, ...changes.removed]) void update(path);
-    }).catch(() => undefined);
-    if (!unwatch) return;
-    watching.set(machineId, unwatch);
-    // A machine that kept reporting while the app was away: what it wrote is where its rows start.
-    for (const entry of await node.fs.readDirectory(root).catch(() => [])) void update(posix.join(root, entry.name));
-  }
-
-  /** What a file on a machine holds, and nothing at all when that machine has no such file. */
-  async function readFile(node: MachineConnection, path: string) {
-    if (!(await node.fs.stat(path).catch(() => null))) return undefined;
-    return node.fs.readFile(path).then((data) => Buffer.from(data).toString());
-  }
-
-  /** Writes a file on a machine when it is not already what it should be. The SDK has no write of its own, so
-   *  the bytes go over as base64 through the machine's shell, and land under the name they are meant to have. */
-  async function putFile(node: MachineConnection, path: string, content: string) {
-    if (await readFile(node, path) === content) return;
-    // The name the bytes land under is the shell's own, so two writes of one file do not take each other's.
-    const script = `set -eu
-mkdir -p "$1"
-printf %s "$3" | base64 -d > "$1/$2.$$.tmp"
-mv "$1/$2.$$.tmp" "$1/$2"`;
-    const result = await shell(node, script, posix.dirname(path), posix.basename(path), Buffer.from(content).toString('base64'));
-    if (result.code !== 0) throw new Error(Buffer.from(result.stderr).toString().trim() || `Cannot write ${path}`);
-  }
-
-  /** The path codex files this machine's hooks under, which a home behind a symlink does not show. */
-  async function realDirectory(node: MachineConnection, path: string) {
-    const result = await shell(node, 'cd "$1" && pwd -P', path).catch(() => undefined);
-    return result?.code === 0 ? Buffer.from(result.stdout).toString().trim() || path : path;
-  }
-
-  /** The trust codex records for one hook when it is approved by hand: its event, its timeout and its command,
-   *  hashed the way codex hashes them, with the keys in the order codex sorts them. A hook it holds no trust
-   *  for does not run. */
-  function hookHash(label: string, command: string, timeout: number) {
-    const identity = { event_name: label, hooks: [{ async: false, command, timeout, type: 'command' }] };
-    return `sha256:${createHash('sha256').update(JSON.stringify(identity)).digest('hex')}`;
-  }
-
-  /** Adds those trust records to codex's config file, and leaves every other line of it where it was. */
-  function withHookState(config: string, records: { key: string; hash: string }[]) {
-    const lines = config ? config.split('\n') : [];
-    for (const { key, hash } of records) {
-      const header = `[hooks.state."${key}"]`;
-      // What the file does not have yet goes at its end; a table it has is rewritten where it stands.
-      const tableStart = lines.indexOf(header);
-      if (tableStart === -1) {
-        lines.push(header, `trusted_hash = "${hash}"`, '');
-        continue;
-      }
-      const nextTable = lines.findIndex((line, index) => index > tableStart && line.startsWith('['));
-      const tableEnd = nextTable === -1 ? lines.length : nextTable;
-      lines.splice(tableStart + 1, tableEnd - tableStart - 1, `trusted_hash = "${hash}"`, '');
-    }
-    return `${lines.join('\n').replace(/\n+$/, '')}\n`;
-  }
-
-  /** Where codex keeps its settings, which hold the hooks and the config this plugin installs. */
-  function codexDirectory(home: string) {
-    return posix.join(home, '.codex');
-  }
-
-  /** The hook codex runs, which the entries that run it and the trust recorded for them both derive from. */
-  function codexHook(home: string) {
-    return posix.join(codexDirectory(home), 'wangcai-agent-state.sh');
-  }
-
-  /** What codex needs on a machine besides its hook: the entries in hooks.json that run it, and the trust to run
-   *  those. */
-  async function installCodexHooks(home: string, node: MachineConnection) {
-    const directory = codexDirectory(home);
-    const scriptFile = codexHook(home);
-    const hooksName = 'hooks.json';
-    const hooksFile = posix.join(directory, hooksName);
-    const stored = await readFile(node, hooksFile);
-    let settings: Record<string, unknown> = {};
-    if (stored !== undefined) {
-      try {
-        settings = JSON.parse(stored) as Record<string, unknown>;
-      } catch {
-        // Another tool's file in a shape this cannot merge into: leaving it alone beats replacing it.
-        throw new Error(`Cannot read ${hooksFile}`);
-      }
-    }
-    const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
-    // The three events codex runs this for, the action each passes the hook, and the label codex files trust under.
-    const reports = [
-      { event: 'SessionStart', label: 'session_start', action: 'clear' },
-      { event: 'UserPromptSubmit', label: 'user_prompt_submit', action: 'working' },
-      { event: 'Stop', label: 'stop', action: 'finished' },
-    ];
-    // Codex would allow a hook ten minutes, but this one writes a word: one that hangs is broken, and should not
-    // hold the turn that waits on it. The number is part of what codex trusts, so changing it asks again.
-    const timeout = 10;
-    // Trust is filed under the path codex resolved, which a home behind a symlink spells differently.
-    const resolved = await realDirectory(node, directory);
-    const records: { key: string; hash: string }[] = [];
-    for (const { event, label, action } of reports) {
-      // The entries this plugin wrote before are replaced, and what another tool put there is kept.
-      const kept = (hooks[event] ?? []).filter((group) => !JSON.stringify(group).includes(scriptFile));
-      const command = `/bin/sh '${scriptFile}' ${action}`;
-      hooks[event] = [...kept, { hooks: [{ type: 'command', command, timeout }] }];
-      // Trust belongs to the hook's own place in that file: which file it came from, the event, its row.
-      records.push({ key: `${resolved}/${hooksName}:${label}:${kept.length}:0`, hash: hookHash(label, command, timeout) });
-    }
-    settings.hooks = hooks;
-    await putFile(node, hooksFile, `${JSON.stringify(settings, null, 2)}\n`);
-    const configFile = posix.join(directory, 'config.toml');
-    await putFile(node, configFile, withHookState((await readFile(node, configFile)) ?? '', records));
-  }
-
-  /** Whether a machine has the directory a tool keeps its settings in. */
-  async function hasTool(node: MachineConnection, path: string) {
-    return (await node.fs.stat(path).catch(() => null))?.isDirectory === true;
-  }
-
-  /** Where pi keeps its settings, which hold the extensions this plugin installs. */
-  function piDirectory(home: string) {
-    return posix.join(home, '.pi');
-  }
-
-  /** The extension this plugin keeps in place for pi. */
-  function piExtension(home: string) {
-    return posix.join(piDirectory(home), 'agent/extensions/wangcai-agent-state.ts');
-  }
-
-  /** The files the agents on a machine load, brought to what this plugin ships: a machine that lost one, or kept
-   *  one from an older plugin, gets it back before the next session reads it. A machine without the tool is left
-   *  alone, since there is nothing there to load it. */
-  async function syncIntegrations(node: MachineConnection, home: string) {
-    const hasPi = await hasTool(node, piDirectory(home));
-    const hasCodex = await hasTool(node, codexDirectory(home));
-    if (hasPi) await putFile(node, piExtension(home), readFileSync(join(__dirname, 'integrations/pi-agent-state.ts'), 'utf8'));
-    if (hasCodex) await putFile(node, codexHook(home), readFileSync(join(__dirname, 'integrations/codex-agent-state.sh'), 'utf8'));
-    return hasCodex;
-  }
-
-  /** What the agents on a machine need to report: their files, and for codex the entries and trust that run one. */
-  async function installAgents(machineId: string, node: MachineConnection) {
-    if (installed.has(machineId)) return;
-    const home = await homeOf(machineId, node);
-    if (!home) return;
-    const hasCodex = await syncIntegrations(node, home);
-    if (hasCodex) await installCodexHooks(home, node);
-    installed.add(machineId);
-  }
-
   let following = false;
   async function follow() {
     if (following) return;
@@ -545,6 +359,8 @@ mv "$1/$2.$$.tmp" "$1/$2"`;
   const follower = setInterval(() => void follow(), 1000);
   return () => {
     clearInterval(follower);
+    for (const timer of quietTimers.values()) clearTimeout(timer);
+    quietTimers.clear();
     for (const remove of handlers) remove();
     for (const id of new Set([...connections.keys(), ...pending.keys()])) disconnect(id);
   };

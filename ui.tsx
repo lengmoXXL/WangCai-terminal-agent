@@ -14,6 +14,8 @@ import './style.css';
 
 let api: WangcaiAPI;
 
+const OUTPUT_REPORT = 250;
+
 function TerminalPane({ context, session, active, connected, generation, profile, machineId }: {
   context: UiContext; session: Session; active: boolean; connected: boolean; generation: number; profile: Settings; machineId: string;
 }) {
@@ -55,6 +57,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
     let socket: WebSocket | undefined;
     let attempt = 0;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    let lastReport = 0;
     setError('');
     const send = (op: string, params: Record<string, unknown> = {}) => {
       socket!.send(JSON.stringify({ op, session_id: session.id, ...params }));
@@ -108,6 +111,12 @@ function TerminalPane({ context, session, active, connected, generation, profile
               sendSize();
             });
             return;
+          }
+          // The app reads the quiet after the last report as the end, so output is reported at most once per interval.
+          const now = Date.now();
+          if (now - lastReport >= OUTPUT_REPORT) {
+            lastReport = now;
+            void api.activity(session.id).catch(() => {});
           }
           term.write(payload);
         };
@@ -173,6 +182,7 @@ function App({ context, profile }: { context: UiContext; profile: Settings }) {
   const [config, setConfig] = useState<Config>();
   const [states, setStates] = useState<Record<string, MachineState>>({});
   const [error, setError] = useState('');
+
   useEffect(() => {
     const off = api.onState((state) => setStates((states) => ({ ...states, [state.machineId]: state })));
     const offConfig = api.onConfig(setConfig);
@@ -215,6 +225,7 @@ export function mount(container: HTMLElement, context: UiContext) {
     click: (sessionId, location) => context.ui.request('click', { sessionId, location }),
     config: () => context.ui.request('config'),
     states: () => context.ui.request('states'),
+    activity: (sessionId) => context.ui.request('activity', { sessionId }),
     selectWorkspace: (id) => context.ui.request('workspace-select', { id }),
     address: (machineId) => context.ui.request('address', { machineId }),
     resolve: (sessionId, paths) => context.ui.request('resolve', { sessionId, paths }),
