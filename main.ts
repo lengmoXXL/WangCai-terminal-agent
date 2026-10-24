@@ -62,8 +62,28 @@ export async function activate(context: MainContext) {
   const handlers: (() => void)[] = [];
   // What each workspace's terminal last showed. A workspace with no entry has said nothing yet.
   const agentStates = new Map<string, WorkspaceStatus>();
-  function stateOf(id: string) {
-    return agentStates.get(id) ?? 'idle';
+  // What the sidebar was told a workspace draws.
+  const reported = new Map<string, WorkspaceStatus>();
+  // Completions the person has already looked at, by workspace.
+  const acknowledged = new Set<string>();
+  function drawnStatus(id: string) {
+    const status = agentStates.get(id) ?? 'idle';
+    if (status !== 'finished') return status;
+    // The front is being watched, so its completion has been looked at.
+    if (id === active) acknowledged.add(id);
+    return acknowledged.has(id) ? 'idle' : status;
+  }
+  function reportStatus(id: string) {
+    const status = drawnStatus(id);
+    if (reported.get(id) === status) return;
+    reported.set(id, status);
+    void context.global.publish('workspace-status', { id, status });
+  }
+  function setStatus(id: string, status: WorkspaceStatus) {
+    // Only work in the background can raise a check again.
+    if (status === 'working' && id !== active) acknowledged.delete(id);
+    agentStates.set(id, status);
+    reportStatus(id);
   }
   // Two seconds without a report is a terminal that stopped: agent TUIs repaint while they work.
   const QUIET = 2000;
@@ -77,11 +97,6 @@ export async function activate(context: MainContext) {
       setStatus(workspace.id, 'finished');
     }, QUIET));
     setStatus(workspace.id, 'working');
-  }
-  function setStatus(id: string, status: WorkspaceStatus) {
-    if (status === stateOf(id)) return;
-    agentStates.set(id, status);
-    void context.global.publish('workspace-status', { id, status });
   }
 
   if (existsSync(path)) {
@@ -172,7 +187,7 @@ export async function activate(context: MainContext) {
         label: nameOf(workspace),
         machine: machines.find((machine) => machine.id === workspace.machineId)!.name,
         running: session?.exit_code === null,
-        status: stateOf(workspace.id),
+        status: drawnStatus(workspace.id),
       };
     });
   }
@@ -186,6 +201,8 @@ export async function activate(context: MainContext) {
   // The window draws the list from this, and the tab views follow whichever workspace is in front.
   async function announce() {
     context.ui.publish('config', { workspaces, active });
+    // The front decides what each row draws, so every row is worked out again here.
+    for (const workspace of workspaces) reportStatus(workspace.id);
     const list = rows();
     const shape = shapeOf(list);
     if (shape !== announced) {
@@ -267,6 +284,8 @@ export async function activate(context: MainContext) {
     }
     workspaces = workspaces.filter((item) => item.id !== id);
     agentStates.delete(id);
+    reported.delete(id);
+    acknowledged.delete(id);
     clearTimeout(quietTimers.get(id));
     quietTimers.delete(id);
     if (active === id) active = undefined;
