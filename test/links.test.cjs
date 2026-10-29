@@ -89,6 +89,27 @@ test('a wrapped path is one line to the links, and a rewrap while a look is out 
   assert.deepEqual(found[0].range, { start: cellOf(at), end: cellOf(at + link.length - 1) }, 'the link covers the rows the path has now');
 });
 
+test('an OSC 8 link opens its address in a browser on Command, and its path in its file', async () => {
+  const { registerFileLinks } = await import('../file-links/links.ts');
+  const { term } = lineBuffer('', 24);
+  const opened = [];
+  const clicks = [];
+  registerFileLinks(term, {
+    resolve: async () => ({}),
+    activate: (path) => clicks.push(path),
+    openAddress: (uri) => opened.push(uri),
+  });
+  const handler = term.options.linkHandler;
+  handler.activate({ metaKey: false }, 'https://example.com/a');
+  assert.deepEqual(opened, [], 'a click on its own opens nothing');
+  handler.activate({ metaKey: true }, 'https://example.com/a');
+  assert.deepEqual(opened, ['https://example.com/a'], 'the app is handed the address');
+  handler.activate({ metaKey: true }, '/home/user/main.rs:3');
+  assert.deepEqual(clicks, ['/home/user/main.rs'], 'a path handed over this way opens its file');
+  handler.activate({ metaKey: true }, 'javascript:alert(1)');
+  assert.deepEqual(opened, ['https://example.com/a'], 'a target that is neither the web nor a file opens nothing');
+});
+
 // What the terminal shows: every row, and the part of it a hover left a link on.
 const drawn = (page) => page.evaluate((selector) => {
   const rows = [...document.querySelectorAll(`${selector} .xterm-rows > div`)];
