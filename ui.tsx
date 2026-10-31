@@ -171,14 +171,21 @@ function TerminalPane({ context, session, active, connected, generation, profile
     if (active) requestAnimationFrame(() => { fit.current?.fit(); terminal.current?.focus(); });
   }, [active, connected, generation]);
 
-  // A key that shows this workspace puts the focus on the page, and what the page draws is a terminal.
+  // The listener below is set up once, so the pane in front is read through a ref: a listener rebuilt on every switch would
+  // also rerun the catch-up, and take back keys the page was just given.
+  const inFront = useRef(active);
+  useEffect(() => { inFront.current = active; }, [active]);
+  // A key that shows this workspace leaves the keys on the page, and the pane in front is what takes them. Two Escapes
+  // leave a field the same way, and there the focus stays where they put it.
   useEffect(() => {
     const page = element.current?.closest<HTMLElement>('[data-plugin]');
     if (!page) return;
-    const focus = () => { if (active) terminal.current?.focus(); };
-    page.addEventListener('focus', focus);
-    return () => page.removeEventListener('focus', focus);
-  }, [active]);
+    const focus = () => { if (inFront.current) terminal.current?.focus(); };
+    page.addEventListener('wangcai:shown', focus);
+    // A page a key showed is focused before the pane in it exists, so it is taken here as well.
+    if (page === document.activeElement) focus();
+    return () => page.removeEventListener('wangcai:shown', focus);
+  }, []);
 
   return <div className={`terminal-pane ${active ? 'active' : ''}`}>
     <div className="terminal-surface" ref={element} />
