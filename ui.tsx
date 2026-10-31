@@ -171,6 +171,15 @@ function TerminalPane({ context, session, active, connected, generation, profile
     if (active) requestAnimationFrame(() => { fit.current?.fit(); terminal.current?.focus(); });
   }, [active, connected, generation]);
 
+  // A key that shows this workspace puts the focus on the page, and what the page draws is a terminal.
+  useEffect(() => {
+    const page = element.current?.closest<HTMLElement>('[data-plugin]');
+    if (!page) return;
+    const focus = () => { if (active) terminal.current?.focus(); };
+    page.addEventListener('focus', focus);
+    return () => page.removeEventListener('focus', focus);
+  }, [active]);
+
   return <div className={`terminal-pane ${active ? 'active' : ''}`}>
     <div className="terminal-surface" ref={element} />
     {error && <div className="terminal-message error">{error}</div>}
