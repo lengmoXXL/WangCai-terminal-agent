@@ -3,8 +3,7 @@ const assert = require('node:assert/strict');
 const { ACTIVE_TERMINAL, activeTerminal, createWorkspace, withWindow } = require('@lengmoxxl/wangcai-testkit');
 const { lists } = require('./terminal-agent-ui.cjs');
 
-// A program in the terminal draws its own caret and keeps drawing it, so what shows the keys left is the whole
-// surface going dim.
+// The value comes from style.css, which lowers it while the keys are elsewhere.
 const opacity = (page) => page.evaluate((selector) => getComputedStyle(document.querySelector(`${selector} .terminal-surface`)).opacity, ACTIVE_TERMINAL);
 
 test('two Escapes leave the terminal dim, and a click brings it back', { timeout: 180000 }, () => withWindow('wangcai-terminal-focus', lists, async ({ page }) => {
