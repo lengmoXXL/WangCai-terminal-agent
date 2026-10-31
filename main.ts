@@ -7,6 +7,8 @@ import { registerFilePaths } from './file-links/paths';
 import { registerImages } from './images';
 import type { Machine, MachineState, Workspace } from './shared';
 
+export const keys = { '<leader>aa': { global: true, desc: '切到工作区终端', event: 'core:show-view', data: { plugin: 'terminal-agent' } } };
+
 // Which fields this plugin takes from init.ts, and the default each one falls back to.
 export const config = {
   font: {
