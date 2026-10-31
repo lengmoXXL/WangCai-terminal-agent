@@ -7,9 +7,6 @@
 .wangcai-terminal-agent .terminal-pane { display: none; flex: 1; min-height: 0; padding: 10px 8px 6px 12px; flex-direction: column; }
 .wangcai-terminal-agent .terminal-pane.active { display: flex; }
 .wangcai-terminal-agent .terminal-surface { flex: 1; min-height: 0; }
-/* A program in the terminal draws its own caret, so the terminal cursor turning hollow is not enough to show the
-   focus left. */
-.wangcai-terminal-agent .terminal-pane:not(:focus-within) .terminal-surface { opacity: 0.65; }
 /* xterm rounds each row width but lays the glyphs out on the unrounded grid, so size rows to their content. */
 .wangcai-terminal-agent .terminal-surface .xterm-rows > div { width: max-content !important; }
 /* xterm draws its own scrollbar; the viewport's native one only steals the width the grid is sized for. */
