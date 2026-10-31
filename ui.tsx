@@ -171,8 +171,8 @@ function TerminalPane({ context, session, active, connected, generation, profile
     if (active) requestAnimationFrame(() => { fit.current?.fit(); terminal.current?.focus(); });
   }, [active, connected, generation]);
 
-  // The listener below is set up once, so the pane in front is read through a ref: a listener rebuilt on every switch would
-  // also rerun the catch-up, and take back keys the page was just given.
+  // The listener below is registered once, so the pane in front is read through a ref as it fires; the catch-up inside it
+  // belongs to the mount, not to every switch.
   const inFront = useRef(active);
   useEffect(() => { inFront.current = active; }, [active]);
   // A key that shows this workspace leaves the keys on the page, and the pane in front is what takes them. Two Escapes
