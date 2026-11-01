@@ -51,6 +51,22 @@ function machineList(given: unknown[]): Machine[] {
   return machines;
 }
 
+/** What a provider reports in the `git` of a `workspace-git` payload, as the `@lengmoxxl/sdk` README describes it. */
+type WorkspaceGit = { branch: string; ahead: number; behind: number; dirty: boolean };
+
+/** What `git status --porcelain=v2 --branch` printed in a repository. */
+function parseGitStatus(stdout: Uint8Array): WorkspaceGit {
+  const lines = Buffer.from(stdout).toString().split('\n');
+  const head = lines.find((line) => line.startsWith('# branch.head '));
+  const counts = lines.find((line) => line.startsWith('# branch.ab '))?.split(/\s+/).slice(2) ?? [];
+  return {
+    branch: head?.slice('# branch.head '.length).trim() ?? '',
+    ahead: Number(counts[0]?.slice(1)) || 0,
+    behind: Number(counts[1]?.slice(1)) || 0,
+    dirty: lines.some((line) => line !== '' && !line.startsWith('#')),
+  };
+}
+
 export async function activate(context: MainContext) {
   const path = join(context.host.dataDirectory, 'config.json');
   const settings: { machines: unknown[]; images: { maxCount: number } } = context.host.config;
@@ -64,8 +80,20 @@ export async function activate(context: MainContext) {
   const handlers: (() => void)[] = [];
   // What each workspace's terminal last showed. A workspace with no entry has said nothing yet.
   const agentStates = new Map<string, WorkspaceStatus>();
-  // What the sidebar was told a workspace draws.
-  const reported = new Map<string, WorkspaceStatus>();
+  // What the sidebar was told about each workspace, by topic: a value goes out only when it changes, and a value that
+  // cannot be worked out is not sent at all — the row keeps what it last said until it is told again.
+  const reported = new Map<string, string>();
+  const toldKey = (topic: string, id: string) => `${topic} ${id}`;
+  function report(topic: string, id: string, payload: Record<string, unknown>) {
+    const key = toldKey(topic, id);
+    const shape = JSON.stringify(payload);
+    if (reported.get(key) === shape) return;
+    reported.set(key, shape);
+    void context.global.publish(topic, { id, ...payload });
+  }
+  function forget(topic: string, id: string) {
+    reported.delete(toldKey(topic, id));
+  }
   // Completions the person has already looked at, by workspace.
   const acknowledged = new Set<string>();
   function drawnStatus(id: string) {
@@ -76,10 +104,7 @@ export async function activate(context: MainContext) {
     return acknowledged.has(id) ? 'idle' : status;
   }
   function reportStatus(id: string) {
-    const status = drawnStatus(id);
-    if (reported.get(id) === status) return;
-    reported.set(id, status);
-    void context.global.publish('workspace-status', { id, status });
+    report('workspace-status', id, { status: drawnStatus(id) });
   }
   function setStatus(id: string, status: WorkspaceStatus) {
     // Only work in the background can raise a check again.
@@ -231,6 +256,94 @@ export async function activate(context: MainContext) {
     return machine && node ? { machine, node } : undefined;
   }
 
+  /** Runs one script on a machine, with the arguments it reads as `$1`, `$2`, and so on. */
+  function shell(node: MachineConnection, script: string, ...args: string[]) {
+    // `$0` only names the script to the shell, and `/` is a directory every machine has, so nothing here
+    // depends on where the node itself was started.
+    return node.subprocess.exec('/bin/sh', ['-c', script, 'wangcai-terminal-agent', ...args], { cwd: '/' });
+  }
+
+  const homes = new Map<string, Promise<string>>();
+  function homeOf(machineId: string, node: MachineConnection) {
+    let value = homes.get(machineId);
+    if (!value) {
+      value = shell(node, 'printf %s "$HOME"')
+        .then((result) => result.code === 0 ? Buffer.from(result.stdout).toString().trim() : '')
+        .catch(() => '');
+      homes.set(machineId, value);
+    }
+    return value;
+  }
+
+  // Walks the workspaces whose terminal is up, each with the directory its shell is in now.
+  async function* terminals() {
+    for (const workspace of workspaces) {
+      const node = connections.get(workspace.machineId);
+      if (!node || !workspace.sessionId) continue;
+      const cwd = await node.pty.cwd(workspace.sessionId).catch(() => undefined);
+      if (cwd !== undefined) yield { workspace, node, cwd };
+    }
+  }
+
+  // A pass that takes a while is not run on top of the one still going.
+  function alone(pass: () => Promise<void>) {
+    let running = false;
+    return async () => {
+      if (running) return;
+      running = true;
+      try {
+        await pass();
+      } finally {
+        running = false;
+      }
+    };
+  }
+
+  // A row is named after the directory its shell is in, and a directory read is cheap enough to keep that a second behind at
+  // most.
+  const FOLLOW_REFRESH = 1000;
+  // A commit made in a terminal, or a fetch made elsewhere, changes what the row should say.
+  const GIT_REFRESH = 5000;
+  const follow = alone(async () => {
+    let changed = false;
+    for await (const { workspace, node, cwd } of terminals()) {
+      // A replacement terminal opens where this shell is.
+      if (cwd !== workspace.cwd) {
+        workspace.cwd = cwd;
+        changed = true;
+      }
+      // A name given by hand stays what it is, wherever the shell goes.
+      if (workspace.manual) continue;
+      const home = await homeOf(workspace.machineId, node);
+      const name = cwd === home ? '~' : posix.basename(cwd) || '/';
+      if (name !== workspace.name) {
+        workspace.name = name;
+        changed = true;
+      }
+    }
+    if (changed) {
+      save();
+      await announce();
+    }
+  });
+  const readGit = alone(async () => {
+    for await (const { workspace, node, cwd } of terminals()) {
+      try {
+        const env = { GIT_OPTIONAL_LOCKS: '0' };
+        const run = (...args: string[]) => node.subprocess.exec('git', args, { cwd, env });
+        const status = await run('-c', 'core.fsmonitor=false', 'status', '--porcelain=v2', '--branch');
+        if (status.code === 0) report('workspace-git', workspace.id, { git: parseGitStatus(status.stdout) });
+        // When `status` fails, only a directory git cannot work in is no repository; the exit code decides, because the
+        // message git prints is translated.
+        else if ((await run('rev-parse', '--is-inside-work-tree')).code !== 0) report('workspace-git', workspace.id, { git: null });
+      } catch {
+        // Nothing to say: the machine or the directory is gone.
+      }
+    }
+  });
+  const followTimer = setInterval(() => void follow(), FOLLOW_REFRESH);
+  const gitTimer = setInterval(() => void readGit(), GIT_REFRESH);
+
   handlers.push(...registerFilePaths(context, hostOf));
   handlers.push(registerImages(context, hostOf, settings.images.maxCount));
   handlers.push(context.ui.handle('config', () => ({ workspaces, active })));
@@ -286,7 +399,8 @@ export async function activate(context: MainContext) {
     }
     workspaces = workspaces.filter((item) => item.id !== id);
     agentStates.delete(id);
-    reported.delete(id);
+    forget('workspace-status', id);
+    forget('workspace-git', id);
     acknowledged.delete(id);
     clearTimeout(quietTimers.get(id));
     quietTimers.delete(id);
@@ -325,61 +439,9 @@ export async function activate(context: MainContext) {
     if (!node) throw new Error('Machine is not connected');
     return `ws://localhost:${node.port}`;
   }));
-  /** Runs one script on a machine, with the arguments it reads as `$1`, `$2`, and so on. */
-  function shell(node: MachineConnection, script: string, ...args: string[]) {
-    // `$0` only names the script to the shell, and `/` is a directory every machine has, so nothing here
-    // depends on where the node itself was started.
-    return node.subprocess.exec('/bin/sh', ['-c', script, 'wangcai-terminal-agent', ...args], { cwd: '/' });
-  }
-
-  const homes = new Map<string, Promise<string>>();
-  function homeOf(machineId: string, node: MachineConnection) {
-    let value = homes.get(machineId);
-    if (!value) {
-      value = shell(node, 'printf %s "$HOME"')
-        .then((result) => result.code === 0 ? Buffer.from(result.stdout).toString().trim() : '')
-        .catch(() => '');
-      homes.set(machineId, value);
-    }
-    return value;
-  }
-
-  let following = false;
-  async function follow() {
-    if (following) return;
-    following = true;
-    try {
-      let changed = false;
-      for (const workspace of workspaces) {
-        const node = connections.get(workspace.machineId);
-        if (!node || !workspace.sessionId) continue;
-        let cwd: string;
-        try { cwd = await node.pty.cwd(workspace.sessionId); } catch { continue; }
-        // A replacement terminal opens where this shell is.
-        if (cwd !== workspace.cwd) {
-          workspace.cwd = cwd;
-          changed = true;
-        }
-        // A name given by hand stays what it is, wherever the shell goes.
-        if (workspace.manual) continue;
-        const home = await homeOf(workspace.machineId, node);
-        const name = cwd === home ? '~' : posix.basename(cwd) || '/';
-        if (name !== workspace.name) {
-          workspace.name = name;
-          changed = true;
-        }
-      }
-      if (changed) {
-        save();
-        await announce();
-      }
-    } finally {
-      following = false;
-    }
-  }
-  const follower = setInterval(() => void follow(), 1000);
   return () => {
-    clearInterval(follower);
+    clearInterval(followTimer);
+    clearInterval(gitTimer);
     for (const timer of quietTimers.values()) clearTimeout(timer);
     quietTimers.clear();
     for (const remove of handlers) remove();
