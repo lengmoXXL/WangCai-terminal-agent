@@ -38,7 +38,7 @@ test('the row says what git makes of the workspace', { timeout: 180000 }, () => 
     await createWorkspace(page);
     const cell = tabs(page).first().locator('.git');
     // The repository is asked about on a timer, and the row is patched where it stands.
-    await until(async () => (await cell.textContent()) === '↓1↑1●');
+    await until(async () => (await cell.textContent()) === '↓1↑1*');
     assert.equal(await cell.getAttribute('title'), 'main · 1 个提交待拉取 · 1 个提交待推送 · 有未提交的修改');
   } finally {
     rmSync(outside, { recursive: true, force: true });
