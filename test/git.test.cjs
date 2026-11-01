@@ -36,10 +36,12 @@ test('the row says what git makes of the workspace', { timeout: 180000 }, () => 
     git(home, 'fetch', '-q', 'origin');
     writeFileSync(join(home, 'dirty.txt'), 'dirty');
     await createWorkspace(page);
-    const cell = tabs(page).first().locator('.git');
+    const row = tabs(page).first();
+    const cell = row.locator('.git');
     // The repository is asked about on a timer, and the row is patched where it stands.
-    await until(async () => (await cell.textContent()) === '↓1↑1*');
+    await until(async () => (await cell.textContent()) === '↓1↑1');
     assert.equal(await cell.getAttribute('title'), 'main · 1 个提交待拉取 · 1 个提交待推送 · 有未提交的修改');
+    assert.equal(await row.locator('.changes').textContent(), '*', 'the change in the tree marks the name');
   } finally {
     rmSync(outside, { recursive: true, force: true });
   }
