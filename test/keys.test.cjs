@@ -6,7 +6,7 @@ test('the workspace takes the keys when its own key asks for it', { timeout: 180
   await createWorkspace(page);
   // The keys are elsewhere: nothing in the window holds them until the key asks for the workspace.
   await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
-  for (const key of ['Space', 'a', 'a']) await page.keyboard.press(key);
+  for (const key of ['Control+Space', 'a']) await page.keyboard.press(key);
   // The key reaches the view through the main process, so the keys are its terminal's only once the round trip is back.
   await until(() => page.evaluate((selector) => document.querySelector(`${selector} .xterm-helper-textarea`) === document.activeElement, ACTIVE_TERMINAL));
   // Nothing is clicked between the key and the typing: showing the workspace is what puts the keys in its terminal.
