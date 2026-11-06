@@ -2,8 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { mkdirSync, readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { ACTIVE_TERMINAL, createWorkspace, openView, run, serveRenderer, until, withHome, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { closeWorkspace, lists, openWorkspaces, runUntilShown, screen, settled, storedConfig, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
+const { serveRenderer, until, withHome, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { ACTIVE_TERMINAL, closeWorkspace, createWorkspace, lists, openView, openWorkspaces, run, runUntilShown, screen, settled, storedConfig, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
 
 // The sidebar's own tab for the view the files plugin draws.
 const fileTab = (page) => page.getByRole('tab', { name: '文件', exact: true });

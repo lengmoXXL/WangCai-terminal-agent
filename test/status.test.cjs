@@ -2,8 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { existsSync, mkdirSync, readdirSync } = require('node:fs');
 const { join } = require('node:path');
-const { ACTIVE_TERMINAL, createWorkspace, run, until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { lists, tabs } = require('./terminal-agent-ui.cjs');
+const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { ACTIVE_TERMINAL, createWorkspace, lists, run, tabs } = require('./terminal-agent-ui.cjs');
 
 // Core paints what this plugin reports on the workspace's row, so the state is the row's own attribute.
 const row = (page, at) => tabs(page).nth(at);

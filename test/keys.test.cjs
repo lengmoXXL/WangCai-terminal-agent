@@ -1,6 +1,6 @@
 const { test } = require('node:test');
-const { ACTIVE_TERMINAL, activeTerminal, createWorkspace, until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { lists, screen } = require('./terminal-agent-ui.cjs');
+const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { ACTIVE_TERMINAL, activeTerminal, createWorkspace, lists, screen } = require('./terminal-agent-ui.cjs');
 
 test('the workspace takes the keys when its own key asks for it', { timeout: 180000 }, () => withWindow('wangcai-terminal-agent-keys', lists, async ({ page }) => {
   await createWorkspace(page);

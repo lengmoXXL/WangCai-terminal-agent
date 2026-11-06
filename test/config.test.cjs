@@ -2,8 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { writeFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { createWorkspace, openWorkspaceMenu, until, withHome } = require('@lengmoxxl/wangcai-testkit');
-const { pluginDirectory } = require('./terminal-agent-ui.cjs');
+const { until, withHome } = require('@lengmoxxl/wangcai-testkit');
+const { createWorkspace, openWorkspaceMenu, pluginDirectory } = require('./terminal-agent-ui.cjs');
 
 test('user config: init.ts drives the plugins, the UI theme, their own config and the terminal', { timeout: 180000 }, () => withHome('wangcai-config', {}, async ({ home, open }) => {
   const init = join(home, '.config/wangcai/init.ts');

@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createWorkspace, until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { lists, paneErrors, runUntilShown } = require('./terminal-agent-ui.cjs');
+const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { createWorkspace, lists, paneErrors, runUntilShown } = require('./terminal-agent-ui.cjs');
 
 test('a workspace terminal attaches again when the socket to the node drops', { timeout: 180000 }, () => withWindow('wangcai-terminal-agent-socket', lists, async ({ page }) => {
   // A slept laptop takes the pane's own socket with it while the machine itself stays connected, so the

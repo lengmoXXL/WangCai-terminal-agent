@@ -4,8 +4,8 @@ const { execFileSync } = require('node:child_process');
 const { mkdtempSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { createWorkspace, until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { lists, tabs } = require('./terminal-agent-ui.cjs');
+const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { createWorkspace, lists, tabs } = require('./terminal-agent-ui.cjs');
 
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, stdio: 'pipe' });
 

@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { readFileSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { activeTerminal, createWorkspace, until, wangcaiApp, withHome } = require('@lengmoxxl/wangcai-testkit');
-const { pluginDirectory, runUntilShown, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
+const { until, wangcaiApp, withHome } = require('@lengmoxxl/wangcai-testkit');
+const { activeTerminal, createWorkspace, pluginDirectory, runUntilShown, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
 
 test('a node started again carries what init.ts asks for, and its terminals have it', { timeout: 180000 }, () => withHome('wangcai-env', {}, async ({ home, env, open }) => {
   const wangcai = join(wangcaiApp(), 'wangcaicli/dist/debug/wangcai');

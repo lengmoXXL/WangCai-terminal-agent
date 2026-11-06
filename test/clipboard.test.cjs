@@ -2,8 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readdirSync, readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { activeTerminal, createWorkspace, run, until, withHome } = require('@lengmoxxl/wangcai-testkit');
-const { lists, paneErrors, screen } = require('./terminal-agent-ui.cjs');
+const { until, withHome } = require('@lengmoxxl/wangcai-testkit');
+const { activeTerminal, createWorkspace, lists, paneErrors, run, screen } = require('./terminal-agent-ui.cjs');
 
 test('what a program in the terminal copies reaches the system clipboard', { timeout: 180000 }, () => withHome('wangcai-clipboard', lists, async ({ open }) => {
   const { page } = await open();

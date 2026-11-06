@@ -2,8 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { mkdirSync } = require('node:fs');
 const { join } = require('node:path');
-const { createWorkspace, run, until, withHome } = require('@lengmoxxl/wangcai-testkit');
-const { lists, names, settled, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
+const { until, withHome } = require('@lengmoxxl/wangcai-testkit');
+const { createWorkspace, lists, names, run, settled, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
 
 test('a workspace named by hand keeps that name, and an empty one follows the directory again', { timeout: 180000 }, () => withHome('wangcai-rename', lists, async ({ home, open }) => {
   const beta = join(home, 'beta');

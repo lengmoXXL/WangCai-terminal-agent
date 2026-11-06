@@ -2,8 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { mkdirSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { ACTIVE_TERMINAL, createWorkspace, run, until, withHome } = require('@lengmoxxl/wangcai-testkit');
-const { lists, runUntilShown } = require('./terminal-agent-ui.cjs');
+const { until, withHome } = require('@lengmoxxl/wangcai-testkit');
+const { ACTIVE_TERMINAL, createWorkspace, lists, run, runUntilShown } = require('./terminal-agent-ui.cjs');
 
 const cell = (chars) => ({ getChars: () => chars, getWidth: () => 1 });
 
