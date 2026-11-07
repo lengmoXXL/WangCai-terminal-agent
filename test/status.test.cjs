@@ -11,10 +11,9 @@ const stateOf = (page, at) => row(page, at).getAttribute('data-state');
 const inState = (page, state) => tabs(page).and(page.locator(`[data-state="${state}"]`)).first();
 // Input typed into a pane only reaches its shell once that pane is the one in front.
 const firstPaneInFront = (page) => until(() => page.evaluate((selector) => document.querySelector(selector) === document.querySelectorAll('.terminal-pane')[0], ACTIVE_TERMINAL));
-// A terminal counts as done in the plugin's eyes after two seconds of quiet, and only then can a finish come. A shell
-// that draws its prompt again counts as output, so the row it belongs to may report a working again right after.
+// At least QUIET in main.ts.
 const quiet = 2000;
-// One row's turn through that window: it answers false the moment a finish is drawn, and true when a quiet passes.
+// One row's turn through that quiet: it answers false the moment a finish is drawn, and true when a quiet passes.
 const noFinish = async (page, at) => {
   let previous;
   let since = Date.now();
@@ -30,8 +29,17 @@ const noFinish = async (page, at) => {
   return true;
 };
 
-test('a workspace row follows its terminal output, and only a quiet behind it draws a finish', { timeout: 180000 }, () => withWindow('wangcai-status', lists, async ({ page }) => {
+// Under SUSTAINED in main.ts.
+const beforeWorking = 600;
+// Writes for two seconds: long enough to turn the row working, then quiet enough after it to finish.
+const lastingBurst = 'for i in 1 2 3 4 5 6 7; do echo TICK; sleep 0.3; done';
+
+test('a row needs a second of reports to be working, and a quiet behind them to finish', { timeout: 180000 }, () => withWindow('wangcai-status', lists, async ({ page }) => {
   await createWorkspace(page);
+  // The shell's prompt is the whole burst.
+  await page.waitForTimeout(beforeWorking);
+  assert.equal(await stateOf(page, 0), 'idle', 'the row is not working');
+  assert.ok(await noFinish(page, 0), 'the row raises no finish');
   // A command that keeps writing keeps the row working.
   await run(page, 'while :; do echo TICK; sleep 0.1; done');
   await inState(page, 'working').waitFor();
@@ -43,7 +51,7 @@ test('a workspace row follows its terminal output, and only a quiet behind it dr
   // The one behind finishes while nobody watches it, so that is where the finish belongs.
   await row(page, 0).click();
   await firstPaneInFront(page);
-  await run(page, 'sleep 3; echo DONE');
+  await run(page, lastingBurst);
   await row(page, 1).click();
   await inState(page, 'working').waitFor();
   await inState(page, 'finished').waitFor();
@@ -56,7 +64,7 @@ test('a finish is the row it is drawn on, and looking at it is what clears it', 
   // The first workspace finishes while the second one is in front.
   await row(page, 0).click();
   await firstPaneInFront(page);
-  await run(page, 'sleep 3; echo DONE');
+  await run(page, lastingBurst);
   await row(page, 1).click();
   await inState(page, 'finished').waitFor();
   // The row is the finish.

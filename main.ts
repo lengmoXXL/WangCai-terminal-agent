@@ -114,16 +114,24 @@ export async function activate(context: MainContext) {
   }
   // Two seconds without a report is a terminal that stopped: agent TUIs repaint while they work.
   const QUIET = 2000;
+  // One second: reports further apart than that start a new burst, and only a burst that lasts that long is work.
+  const SUSTAINED = 1000;
+  const bursts = new Map<string, { start: number; last: number }>();
   const quietTimers = new Map<string, ReturnType<typeof setTimeout>>();
   function sawOutput(sessionId: string) {
     const workspace = workspaces.find((item) => item.sessionId === sessionId);
     if (!workspace) return;
+    const now = Date.now();
+    const burst = bursts.get(workspace.id);
+    const continued = burst !== undefined && now - burst.last <= SUSTAINED;
+    const start = continued ? burst.start : now;
+    bursts.set(workspace.id, { start, last: now });
+    if (now - start >= SUSTAINED) setStatus(workspace.id, 'working');
     clearTimeout(quietTimers.get(workspace.id));
     quietTimers.set(workspace.id, setTimeout(() => {
       quietTimers.delete(workspace.id);
-      setStatus(workspace.id, 'finished');
+      if (agentStates.get(workspace.id) === 'working') setStatus(workspace.id, 'finished');
     }, QUIET));
-    setStatus(workspace.id, 'working');
   }
 
   if (existsSync(path)) {
@@ -404,6 +412,7 @@ export async function activate(context: MainContext) {
     acknowledged.delete(id);
     clearTimeout(quietTimers.get(id));
     quietTimers.delete(id);
+    bursts.delete(id);
     if (active === id) active = undefined;
     save();
     await announce();
