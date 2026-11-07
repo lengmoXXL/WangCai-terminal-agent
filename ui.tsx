@@ -175,8 +175,8 @@ function TerminalPane({ context, session, active, connected, generation, profile
   // belongs to the mount, not to every switch.
   const inFront = useRef(active);
   useEffect(() => { inFront.current = active; }, [active]);
-  // A key that shows this workspace leaves the keys on the page, and the pane in front is what takes them. Two Escapes
-  // leave a field the same way, and there the focus stays where they put it.
+  // A key that shows this workspace leaves the keys on the page, and the pane in front is what takes them. A press that
+  // only leaves a field shows no page, so the keys stay where that press left them.
   useEffect(() => {
     const page = element.current?.closest<HTMLElement>('[data-plugin]');
     if (!page) return;

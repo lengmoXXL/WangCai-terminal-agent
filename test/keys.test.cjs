@@ -15,13 +15,10 @@ test('the workspace takes the keys when its own key asks for it', { timeout: 180
   await until(async () => (await screen(page)).includes('KEYS_ok'));
 }));
 
-test('two Escapes leave the terminal', { timeout: 180000 }, () => withWindow('wangcai-terminal-agent-escape', lists, async ({ page }) => {
+test('Ctrl+Shift+Q leaves the terminal for the page', { timeout: 180000 }, () => withWindow('wangcai-terminal-agent-escape', lists, async ({ page }) => {
   await createWorkspace(page);
   await activeTerminal(page).locator('.xterm-helper-textarea').click();
-  // A pair has to land inside the 300ms the window allows, so both presses go out in one go.
-  await page.evaluate((selector) => {
-    const field = document.querySelector(`${selector} .xterm-helper-textarea`);
-    for (let index = 0; index < 2; index += 1) field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  }, ACTIVE_TERMINAL);
+  // An Escape alone belongs to what the terminal holds.
+  await page.keyboard.press('Control+Shift+Q');
   await until(() => page.evaluate(() => document.querySelector('[data-plugin="terminal-agent"]') === document.activeElement));
 }));
