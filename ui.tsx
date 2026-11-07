@@ -16,6 +16,13 @@ let api: WangcaiAPI;
 
 const OUTPUT_REPORT = 250;
 
+const concat = (chunks: Uint8Array[]) => {
+  const joined = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0));
+  let at = 0;
+  for (const chunk of chunks) { joined.set(chunk, at); at += chunk.length; }
+  return joined;
+};
+
 function TerminalPane({ context, session, active, connected, generation, profile, machineId }: {
   context: UiContext; session: Session; active: boolean; connected: boolean; generation: number; profile: Settings; machineId: string;
 }) {
@@ -58,6 +65,22 @@ function TerminalPane({ context, session, active, connected, generation, profile
     let attempt = 0;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let lastReport = 0;
+    let visible = element.current!.offsetWidth > 0;
+    let frame = 0;
+    let chunks: Uint8Array[] = [];
+    const flush = () => {
+      frame = 0;
+      if (!alive || !visible) { chunks = []; return; }
+      const joined = chunks.length === 1 ? chunks[0] : concat(chunks);
+      chunks = [];
+      term.write(joined);
+    };
+    // One write a frame, as the terminal VS Code draws: the agent hands over more frames than the screen needs.
+    const feed = (data: Uint8Array) => {
+      if (!visible) return;
+      chunks.push(data);
+      if (!frame) frame = requestAnimationFrame(flush);
+    };
     setError('');
     const send = (op: string, params: Record<string, unknown> = {}) => {
       socket!.send(JSON.stringify({ op, session_id: session.id, ...params }));
@@ -65,6 +88,12 @@ function TerminalPane({ context, session, active, connected, generation, profile
     const sendSize = () => {
       if (!ready || replaying) return;
       send('resize', { rows: term.rows, cols: term.cols });
+    };
+    const resync = () => {
+      if (socket?.readyState !== WebSocket.OPEN) return;
+      replaying = true;
+      chunks = [];
+      send('attach');
     };
     if (connected) {
       const reconnect = (error: Error) => {
@@ -93,32 +122,34 @@ function TerminalPane({ context, session, active, connected, generation, profile
             if (reply.error) setError(reply.error);
             return;
           }
+          // What the agent is doing is told by its output, so a hidden pane keeps reporting it and only drops the drawing.
+          const now = Date.now();
+          if (now - lastReport >= OUTPUT_REPORT) {
+            lastReport = now;
+            void api.activity(session.id).catch(() => {});
+          }
+          if (!visible) return;
           const bytes = new Uint8Array(data);
           const length = new DataView(data).getUint32(0);
           const event = JSON.parse(decoder.decode(bytes.subarray(4, 4 + length))) as { event: string; rows: number; cols: number };
           const payload = bytes.subarray(4 + length);
           if (event.event === 'snapshot') {
             setError('');
-            replaying = true;
             ready = true;
+            replaying = true;
+            chunks = [];
             term.reset();
             term.resize(event.cols, event.rows);
             term.write(payload, () => {
               if (!alive) return;
               replaying = false;
-              if (!element.current?.offsetWidth) return;
+              if (!visible) return;
               addon.fit();
               sendSize();
             });
             return;
           }
-          // The app reads the quiet after the last report as the end, so output is reported at most once per interval.
-          const now = Date.now();
-          if (now - lastReport >= OUTPUT_REPORT) {
-            lastReport = now;
-            void api.activity(session.id).catch(() => {});
-          }
-          term.write(payload);
+          feed(payload);
         };
         socket.onclose = () => { if (alive) reconnect(new Error('终端连接已断开')); };
       };
@@ -158,11 +189,19 @@ function TerminalPane({ context, session, active, connected, generation, profile
       if (!replaying && element.current?.offsetWidth && element.current.offsetHeight) addon.fit();
     });
     observer.observe(element.current!);
+    // Only the pane in front draws: a hidden one drops its output and asks for a fresh screen when it comes back.
+    const shown = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting === visible) return;
+      visible = entry.isIntersecting;
+      if (visible) resync();
+    });
+    shown.observe(element.current!);
     return () => {
       alive = false;
       clearTimeout(retry);
+      cancelAnimationFrame(frame);
       surface.removeEventListener('paste', paste, true);
-      input.dispose(); resize.dispose(); observer.disconnect();
+      input.dispose(); resize.dispose(); observer.disconnect(); shown.disconnect();
       command.dispose(); links.dispose(); socket?.close(); term.dispose(); terminal.current = null;
     };
   }, [session.id, connected, generation, profile]);
