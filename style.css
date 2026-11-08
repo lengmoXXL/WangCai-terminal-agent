@@ -6,7 +6,10 @@
 .wangcai-terminal-agent .terminal-area { position: relative; display: flex; height: 100%; flex-direction: column; }
 .wangcai-terminal-agent .terminal-pane { display: none; flex: 1; min-height: 0; padding: 10px 8px 6px 12px; flex-direction: column; }
 .wangcai-terminal-agent .terminal-pane.active { display: flex; }
-.wangcai-terminal-agent .terminal-surface { flex: 1; min-height: 0; }
+/* Writing a caret past the last column — an input method widens it with what it is composing — would otherwise scroll the
+   page around this one to bring that caret into view, and a page that scrolls moves the terminal left under its edge.
+   Clipped rather than hidden: a hidden pane is a scroll container itself, which would move the terminal all the same. */
+.wangcai-terminal-agent .terminal-surface { flex: 1; min-height: 0; overflow: clip; }
 /* xterm rounds each row width but lays the glyphs out on the unrounded grid, so size rows to their content. */
 .wangcai-terminal-agent .terminal-surface .xterm-rows > div { width: max-content !important; }
 /* xterm draws its own scrollbar; the viewport's native one only steals the width the grid is sized for. */

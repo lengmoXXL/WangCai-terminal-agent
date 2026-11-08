@@ -43,6 +43,28 @@ test('local terminal, reconnect and relaunch', { timeout: 180000 }, () => withHo
   assert.deepEqual(terminalShape.bar, ['10px', '10px'], 'the terminal scrollbar is 10px wide');
   assert.ok(terminalShape.overlap <= 0, `the terminal grid runs ${terminalShape.overlap}px under the viewport scrollbar`);
   assert.deepEqual(terminalShape.outline, [18, 19, 20, 255], 'the overview ruler outline hides in the terminal background');
+  // The caret box xterm places at the cursor, pushed past the pane's right edge with text in it.
+  const caretShift = await page.evaluate((selector) => {
+    const surface = document.querySelector(`${selector} .terminal-surface`);
+    const textarea = surface.querySelector('.xterm-helper-textarea');
+    const before = surface.getBoundingClientRect().left;
+    textarea.blur();
+    textarea.style.left = `${surface.clientWidth - 20}px`;
+    textarea.style.width = '200px';
+    textarea.value = 'x'.repeat(40);
+    textarea.focus();
+    // Read while the caret is still out there: putting it back is what makes the browser clamp the scroll.
+    const moved = before - surface.getBoundingClientRect().left;
+    const scrolled = document.querySelector('.desktop-main').scrollLeft;
+    const surfaceScroll = surface.scrollLeft;
+    textarea.value = '';
+    textarea.style.left = '';
+    textarea.style.width = '';
+    return { moved, scrolled, surfaceScroll };
+  }, ACTIVE_TERMINAL);
+  assert.equal(caretShift.scrolled, 0, `the page scrolled ${caretShift.scrolled}px to show the caret`);
+  assert.equal(caretShift.surfaceScroll, 0, `the terminal scrolled ${caretShift.surfaceScroll}px under its own edge`);
+  assert.equal(caretShift.moved, 0, `the terminal moved ${caretShift.moved.toFixed(2)}px left`);
   const workspaces = await openWorkspaces(page);
   assert.equal(workspaces.length, 1);
   assert.equal(await tabs(page).count(), 1);
