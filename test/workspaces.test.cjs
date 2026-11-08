@@ -123,7 +123,7 @@ test('a workspace whose terminal is gone opens again where it was', { timeout: 1
 
   // The shell the workspace had exits, so the next terminal it opens is a replacement.
   await run(page, 'exit');
-  await page.getByRole('button', { name: '重新打开终端' }).click();
+  await page.getByRole('button', { name: '重新打开' }).click();
 
   await runUntilShown(page, 'pwd', directory);
 }));

@@ -229,7 +229,6 @@ function TerminalPane({ context, session, active, connected, generation, profile
   return <div className={`terminal-pane ${active ? 'active' : ''}`}>
     <div className="terminal-surface" ref={element} />
     {error && <div className="terminal-message error">{error}</div>}
-    {session.exit_code !== null && <div className="terminal-message">进程已退出 · exit {session.exit_code}</div>}
   </div>;
 }
 
@@ -267,9 +266,9 @@ function App({ context, profile }: { context: UiContext; profile: Settings }) {
         machineId={workspace.machineId}
       /> : null;
     })}
-    {front && frontSession?.exit_code !== null && <div className="terminal-message">
-      终端未运行
-      <button onClick={() => void api.selectWorkspace(front.id).catch((error: Error) => setError(error.message))}>重新打开终端</button>
+    {front && frontSession && frontSession.exit_code !== null && <div className="terminal-exit">
+      <span className="terminal-exit-label">终端已退出</span>
+      <button onClick={() => void api.selectWorkspace(front.id).catch((error: Error) => setError(error.message))}>重新打开</button>
     </div>}
   </div>;
 }
