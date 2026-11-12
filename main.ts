@@ -364,7 +364,7 @@ export async function activate(context: MainContext) {
     hint: machine.host,
     error: failures.get(machine.id),
   }))));
-  handlers.push(context.ui.handle('workspace-create', async ({ key }: { key: string }) => {
+  handlers.push(context.ui.handle('workspace-create', async ({ key, cwd }: { key: string; cwd?: string }) => {
     const machine = machines.find((machine) => machine.id === key);
     if (!machine) throw new Error('Unknown machine');
     try {
@@ -374,7 +374,7 @@ export async function activate(context: MainContext) {
       failures.set(machine.id, error instanceof Error ? error.message : String(error));
       throw error;
     }
-    const workspace: Workspace = { id: randomUUID(), machineId: machine.id };
+    const workspace: Workspace = { id: randomUUID(), machineId: machine.id, cwd };
     workspaces.push(workspace);
     active = workspace.id;
     await ensure(workspace);
