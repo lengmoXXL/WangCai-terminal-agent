@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "test": "node build.mjs && node --test test/*.test.cjs",
+    "test": "node build.mjs && node --expose-gc --test test/*.test.cjs",
     "typecheck": "tsc"
   },
   "devDependencies": {

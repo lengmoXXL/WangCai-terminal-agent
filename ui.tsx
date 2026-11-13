@@ -7,6 +7,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import type { UiContext } from '@lengmoxxl/sdk/channel';
 import { trackCommand } from './command';
 import { registerFileLinks } from './file-links/links';
+import { resetTerminal } from './reset';
 import { maxImageBytes } from './shared';
 import type { Config, MachineState, Session, Settings, WangcaiAPI, Workspace } from './shared';
 import '@xterm/xterm/css/xterm.css';
@@ -70,14 +71,13 @@ function TerminalPane({ context, session, active, connected, generation, profile
     let chunks: Uint8Array[] = [];
     const flush = () => {
       frame = 0;
-      if (!alive || !visible) { chunks = []; return; }
+      if (!alive) { chunks = []; return; }
       const joined = chunks.length === 1 ? chunks[0] : concat(chunks);
       chunks = [];
       term.write(joined);
     };
     // One write a frame, as the terminal VS Code draws: the agent hands over more frames than the screen needs.
     const feed = (data: Uint8Array) => {
-      if (!visible) return;
       chunks.push(data);
       if (!frame) frame = requestAnimationFrame(flush);
     };
@@ -88,12 +88,6 @@ function TerminalPane({ context, session, active, connected, generation, profile
     const sendSize = () => {
       if (!ready || replaying) return;
       send('resize', { rows: term.rows, cols: term.cols });
-    };
-    const resync = () => {
-      if (socket?.readyState !== WebSocket.OPEN) return;
-      replaying = true;
-      chunks = [];
-      send('attach');
     };
     if (connected) {
       const reconnect = (error: Error) => {
@@ -122,13 +116,12 @@ function TerminalPane({ context, session, active, connected, generation, profile
             if (reply.error) setError(reply.error);
             return;
           }
-          // What the agent is doing is told by its output, so a hidden pane keeps reporting it and only drops the drawing.
+          // What the agent is doing is told by its output, so a hidden pane keeps reporting it too.
           const now = Date.now();
           if (now - lastReport >= OUTPUT_REPORT) {
             lastReport = now;
             void api.activity(session.id).catch(() => {});
           }
-          if (!visible) return;
           const bytes = new Uint8Array(data);
           const length = new DataView(data).getUint32(0);
           const event = JSON.parse(decoder.decode(bytes.subarray(4, 4 + length))) as { event: string; rows: number; cols: number };
@@ -138,7 +131,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
             ready = true;
             replaying = true;
             chunks = [];
-            term.reset();
+            resetTerminal(term);
             term.resize(event.cols, event.rows);
             term.write(payload, () => {
               if (!alive) return;
@@ -189,11 +182,10 @@ function TerminalPane({ context, session, active, connected, generation, profile
       if (!replaying && element.current?.offsetWidth && element.current.offsetHeight) addon.fit();
     });
     observer.observe(element.current!);
-    // Only the pane in front draws: a hidden one drops its output and asks for a fresh screen when it comes back.
+    // A hidden pane keeps its buffer fed, so coming back only fits the grid again: no re-attach, no replay, no reset.
     const shown = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting === visible) return;
       visible = entry.isIntersecting;
-      if (visible) resync();
     });
     shown.observe(element.current!);
     return () => {
