@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mkdirSync, readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { serveRenderer, until, withHome, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { ACTIVE_TERMINAL, closeWorkspace, createWorkspace, lists, openView, openWorkspaces, run, runUntilShown, screen, settled, storedConfig, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
+const { ACTIVE_TERMINAL, closeWorkspace, createWorkspace, lists, openView, openWorkspaceMenu, openWorkspaces, run, runUntilShown, screen, settled, storedConfig, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
 
 // The sidebar's own tab for the view the files plugin draws.
 const fileTab = (page) => page.getByRole('tab', { name: '文件', exact: true });
@@ -148,4 +148,22 @@ test('a workspace whose terminal is gone opens again where it was', { timeout: 1
   await page.getByRole('button', { name: '重新打开' }).click();
 
   await runUntilShown(page, 'pwd', directory);
+}));
+
+test('what is typed as a workspace opens reaches its own terminal', { timeout: 180000 }, () => withWindow('wangcai-workspace-typing', lists, async ({ page, errors }) => {
+  await createWorkspace(page);
+  await runUntilShown(page, 'echo first', 'first');
+  await openWorkspaceMenu(page);
+  await page.locator('#workspace-row-menu').getByRole('menuitem', { name: '新建 本机', exact: true }).click();
+  // The new pane takes the keys before its snapshot arrives, which is when a person starts typing into it.
+  await until(() => page.evaluate(() => {
+    const panes = [...document.querySelectorAll('.terminal-pane')];
+    return panes.length === 2 && document.activeElement?.closest('.terminal-pane') === panes[1];
+  }));
+  await page.keyboard.type('echo second', { delay: 120 });
+  await page.keyboard.press('Enter');
+  await until(async () => (await screen(page)).includes('echo second'));
+  const drawn = await page.evaluate(() => [...document.querySelectorAll('.terminal-pane')].map((pane) => pane.querySelector('.xterm-rows')?.textContent ?? ''));
+  assert.ok(!drawn[0].includes('second'), 'the workspace that left took none of the keys');
+  assert.deepEqual(errors, []);
 }));

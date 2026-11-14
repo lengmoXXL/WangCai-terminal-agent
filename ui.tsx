@@ -14,6 +14,8 @@ import '@xterm/xterm/css/xterm.css';
 import './style.css';
 
 let api: WangcaiAPI;
+// The session in front, kept as the config arrives: a key that shows this page can come before React has drawn it.
+let frontSessionId: string | undefined;
 
 const OUTPUT_REPORT = 250;
 
@@ -62,6 +64,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
     let alive = true;
     let replaying = false;
     let ready = false;
+    let pending: string[] = [];
     let socket: WebSocket | undefined;
     let attempt = 0;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -136,9 +139,13 @@ function TerminalPane({ context, session, active, connected, generation, profile
             term.write(payload, () => {
               if (!alive) return;
               replaying = false;
-              if (!visible) return;
-              addon.fit();
-              sendSize();
+              if (visible) {
+                addon.fit();
+                sendSize();
+              }
+              const queued = pending;
+              pending = [];
+              for (const data of queued) send('input', { data });
             });
             return;
           }
@@ -149,7 +156,9 @@ function TerminalPane({ context, session, active, connected, generation, profile
       void connect();
     }
     const input = term.onData((data) => {
-      if (!ready || replaying) return;
+      // A pane is focused before its snapshot arrives; dropping the keys typed in between loses what a person types
+      // right after opening or switching a workspace.
+      if (!ready || replaying) { pending.push(data); return; }
       send('input', { data });
     });
     const resize = term.onResize(sendSize);
@@ -199,19 +208,18 @@ function TerminalPane({ context, session, active, connected, generation, profile
   }, [session.id, connected, generation, profile]);
 
   useEffect(() => {
-    if (active) requestAnimationFrame(() => { fit.current?.fit(); terminal.current?.focus(); });
+    if (!active) return;
+    // The keys are this pane's as soon as it is in front: a frame later they would fall into the pane that just left.
+    terminal.current?.focus();
+    requestAnimationFrame(() => fit.current?.fit());
   }, [active, connected, generation]);
 
-  // The listener below is registered once, so the pane in front is read through a ref as it fires; the catch-up inside it
-  // belongs to the mount, not to every switch.
-  const inFront = useRef(active);
-  useEffect(() => { inFront.current = active; }, [active]);
   // A key that shows this workspace leaves the keys on the page, and the pane in front is what takes them. A press that
   // only leaves a field shows no page, so the keys stay where that press left them.
   useEffect(() => {
     const page = element.current?.closest<HTMLElement>('[data-plugin]');
     if (!page) return;
-    const focus = () => { if (inFront.current) terminal.current?.focus(); };
+    const focus = () => { if (frontSessionId === session.id) terminal.current?.focus(); };
     page.addEventListener('wangcai:shown', focus);
     // A page a key showed is focused before the pane in it exists, so it is taken here as well.
     if (page === document.activeElement) focus();
@@ -231,10 +239,14 @@ function App({ context, profile }: { context: UiContext; profile: Settings }) {
 
   useEffect(() => {
     const off = api.onState((state) => setStates((states) => ({ ...states, [state.machineId]: state })));
-    const offConfig = api.onConfig(setConfig);
+    const apply = (next: Config) => {
+      frontSessionId = next.workspaces.find((workspace) => workspace.id === next.active)?.sessionId;
+      setConfig(next);
+    };
+    const offConfig = api.onConfig(apply);
     // The window may mount after a machine is already connected: ask for what happened before it listened.
     void api.states().then((list) => setStates((states) => ({ ...Object.fromEntries(list.map((state) => [state.machineId, state])), ...states }))).catch((error: Error) => setError(error.message));
-    void api.config().then(setConfig).catch((error: Error) => setError(error.message));
+    void api.config().then(apply).catch((error: Error) => setError(error.message));
     return () => { off(); offConfig(); };
   }, []);
   if (!config) return <div className="loading">{error || '正在打开 旺财…'}</div>;

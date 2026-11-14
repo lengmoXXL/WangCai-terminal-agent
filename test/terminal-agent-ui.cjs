@@ -67,7 +67,8 @@ const names = (page) => tabs(page).locator('.name');
 // Waits until the workspace rows show these names, in this order.
 const settled = (page, expected) => until(async () => (await names(page).allTextContents()).join() === expected.join());
 
-// Types a line into the pane in front until the screen shows what it printed: a pane drops input until it attaches.
+// Types a line into the pane in front until the screen shows what it printed: a pane that just came to the front may
+// not take the keys yet.
 const runUntilShown = (page, line, text) => until(async () => (await screen(page)).includes(text), { act: () => run(page, line) });
 
 /** Opens a local workspace, and waits for the shell its pane draws a moment after the workspace appears. */
