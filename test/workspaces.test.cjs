@@ -38,11 +38,13 @@ test('local terminal, reconnect and relaunch', { timeout: 180000 }, () => withHo
       bar: [getComputedStyle(bar).width, getComputedStyle(bar.querySelector('.slider')).width],
       overlap: surface.querySelector('.xterm-screen').offsetWidth - surface.querySelector('.xterm-viewport').clientWidth,
       outline: [...ruler.getContext('2d').getImageData(0, 0, 1, 1).data],
+      // The palette is the theme's to change, so the colour the outline has to hide in is read rather than written here.
+      background: [...getComputedStyle(document.body).backgroundColor.match(/\d+/g).map(Number), 255],
     };
   }, ACTIVE_TERMINAL);
   assert.deepEqual(terminalShape.bar, ['10px', '10px'], 'the terminal scrollbar is 10px wide');
   assert.ok(terminalShape.overlap <= 0, `the terminal grid runs ${terminalShape.overlap}px under the viewport scrollbar`);
-  assert.deepEqual(terminalShape.outline, [18, 19, 20, 255], 'the overview ruler outline hides in the terminal background');
+  assert.deepEqual(terminalShape.outline, terminalShape.background, 'the overview ruler outline hides in the terminal background');
   // The caret box xterm places at the cursor, pushed past the pane's right edge with text in it.
   const caretShift = await page.evaluate((selector) => {
     const surface = document.querySelector(`${selector} .terminal-surface`);

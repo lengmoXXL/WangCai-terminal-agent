@@ -10,7 +10,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
   writeFileSync(init, `
       export const profiles = {
         day: {
-          theme: { background: '#f7f8fa', foreground: '#203040', border: 42 },
+          theme: { WangCai: { background: '#f7f8fa', foreground: '#203040', border: 42 } },
           workspaces: [
             { id: 'terminal-agent', directory: ${JSON.stringify(pluginDirectory('terminal-agent'))}, config: { font: { family: 'Config UI Font' }, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }] } },
           ],
@@ -55,6 +55,6 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
   ({ page, close } = await open());
   await until(() => page.evaluate(() => document.querySelector('#root').textContent.trim() !== ''));
   assert.match(await page.locator('#root').innerText(), /未安装插件/);
-  assert.deepEqual(await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, document.documentElement.style.colorScheme]), ['rgb(18, 19, 20)', 'dark']);
+  assert.deepEqual(await page.evaluate(() => [getComputedStyle(document.body).backgroundColor, document.documentElement.style.colorScheme]), ['rgb(25, 26, 27)', 'dark']);
   assert.deepEqual(await page.evaluate(async () => Object.keys(await window.wangcai.call('config')).sort()), ['theme']);
 }));

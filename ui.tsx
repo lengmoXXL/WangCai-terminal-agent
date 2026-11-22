@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { FitAddon } from '@xterm/addon-fit';
+import type { Theme } from '@lengmoxxl/sdk';
 import type { UiContext } from '@lengmoxxl/sdk/channel';
 import { trackCommand } from './command';
 import { registerFileLinks } from './file-links/links';
@@ -16,6 +17,10 @@ import './style.css';
 let api: WangcaiAPI;
 // The session in front, kept as the config arrives: a key that shows this page can come before React has drawn it.
 let frontSessionId: string | undefined;
+// Kept out of the pane's props: a theme in them would build the terminal again on a switch, and a terminal built again
+// loses the scrollback and the program's own drawing.
+let theme: Theme;
+const xtermTheme = (given: Theme) => ({ ...given, overviewRulerBorder: given.background, selectionBackground: given.selection });
 
 const OUTPUT_REPORT = 250;
 
@@ -41,7 +46,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
       // xterm takes its scrollbar width from the overview ruler, which also paints the ruler outline.
       overviewRuler: { width: 10 },
       scrollback: 10_000, cols: session.cols, rows: session.rows,
-      theme: { ...profile.theme, overviewRulerBorder: profile.theme.background, selectionBackground: profile.theme.selection },
+      theme: xtermTheme(theme),
     });
     const addon = new FitAddon();
     term.loadAddon(addon);
@@ -197,12 +202,13 @@ function TerminalPane({ context, session, active, connected, generation, profile
       visible = entry.isIntersecting;
     });
     shown.observe(element.current!);
+    const offTheme = context.global.subscribe<Theme>('theme', (next) => { term.options.theme = xtermTheme(next); });
     return () => {
       alive = false;
       clearTimeout(retry);
       cancelAnimationFrame(frame);
       surface.removeEventListener('paste', paste, true);
-      input.dispose(); resize.dispose(); observer.disconnect(); shown.disconnect();
+      input.dispose(); resize.dispose(); observer.disconnect(); shown.disconnect(); offTheme();
       command.dispose(); links.dispose(); socket?.close(); term.dispose(); terminal.current = null;
     };
   }, [session.id, connected, generation, profile]);
@@ -292,8 +298,10 @@ export function mount(container: HTMLElement, context: UiContext) {
     onState: (callback) => context.ui.subscribe('state', callback),
   };
   const profile: Settings = context.host.config;
+  theme = profile.theme;
+  const offTheme = context.global.subscribe<Theme>('theme', (next) => { theme = next; });
   container.style.fontFamily = profile.font.family;
   const root = createRoot(container);
   root.render(<App context={context} profile={profile} />);
-  return () => root.unmount();
+  return () => { offTheme(); root.unmount(); };
 }
