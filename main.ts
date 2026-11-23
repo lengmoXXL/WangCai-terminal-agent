@@ -12,7 +12,7 @@ export const keys = { '<leader>a': { global: true, insert: true, desc: '切到�
 // Which fields this plugin takes from init.ts, and the default each one falls back to.
 export const config = {
   font: {
-    family: { type: 'string', default: '"DejaVuSansM Nerd Font Mono", monospace' },
+    family: { type: 'string', default: 'Menlo, monospace' },
     size: { type: 'number', default: 13 },
     lineHeight: { type: 'number', default: 1 },
   },
