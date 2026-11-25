@@ -9,7 +9,7 @@ import type { UiContext } from '@lengmoxxl/sdk/channel';
 import { trackCommand } from './command';
 import { registerFileLinks } from './file-links/links';
 import { resetTerminal } from './reset';
-import { maxImageBytes } from './shared';
+import { maxImageBytes, terminalMachineOf } from './shared';
 import type { Config, MachineState, Session, Settings, WangcaiAPI, Workspace } from './shared';
 import '@xterm/xterm/css/xterm.css';
 import './style.css';
@@ -277,7 +277,7 @@ function CodexPrompt({ workspace }: { workspace: Workspace }) {
         </li>)}
       </ul>}
       {error && <div className="codex-prompt-error">{error}</div>}
-      <div className="codex-prompt-hint">{busy ? '正在连接…' : `Enter 打开 · 目录在 ${workspace.codex!.machineId} 上`}</div>
+      <div className="codex-prompt-hint">{busy ? '正在连接…' : `Enter 打开 · 目录在 ${workspace.machineId} 上`}</div>
     </form>
   </div>;
 }
@@ -302,25 +302,26 @@ function App({ context, profile }: { context: UiContext; profile: Settings }) {
   if (!config) return <div className="loading">{error || '正在打开 旺财…'}</div>;
   // The window says which workspace is in front; what runs in it is this plugin's business.
   const front = config.workspaces.find((workspace) => workspace.id === config.active);
-  const sessionFor = (workspace: Workspace) => (states[workspace.machineId]?.sessions ?? []).find((session) => session.id === workspace.sessionId);
+  const sessionFor = (workspace: Workspace) => (states[terminalMachineOf(workspace)]?.sessions ?? []).find((session) => session.id === workspace.sessionId);
   const frontSession = front ? sessionFor(front) : undefined;
-  const errorMessage = error || (front ? states[front.machineId]?.error : undefined);
+  const errorMessage = error || (front ? states[terminalMachineOf(front)]?.error : undefined);
   return <div className="terminal-area">
     {errorMessage && <div className="error-banner"><span>{errorMessage}</span>{error && <button onClick={() => setError('')}>×</button>}</div>}
     {config.workspaces.map((workspace) => {
-      if (workspace.codex && !workspace.codex.cwd) {
+      if (workspace.type === 'codex' && !workspace.cwd) {
         return workspace.id === config.active ? <CodexPrompt key={workspace.id} workspace={workspace} /> : null;
       }
+      const terminalMachine = terminalMachineOf(workspace);
       const session = sessionFor(workspace);
       return session ? <TerminalPane
         key={`${workspace.id}:${session.id}`}
         context={context}
         session={session}
         active={workspace.id === config.active}
-        connected={states[workspace.machineId]?.status === 'connected'}
-        generation={states[workspace.machineId]?.generation ?? 0}
+        connected={states[terminalMachine]?.status === 'connected'}
+        generation={states[terminalMachine]?.generation ?? 0}
         profile={profile}
-        machineId={workspace.machineId}
+        machineId={terminalMachine}
       /> : null;
     })}
     {front && frontSession && frontSession.exit_code !== null && <div className="terminal-exit">

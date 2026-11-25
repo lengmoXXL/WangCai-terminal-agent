@@ -22,15 +22,15 @@ test('a codex workspace asks for its remote directory before it starts', { timeo
   const prompt = page.locator('.codex-prompt');
   await prompt.waitFor();
   // The workspace is kept as a codex one on the remote machine, with no terminal yet.
-  await until(() => storedWorkspace(home).codex?.machineId === 'wangcai-test.invalid');
-  assert.equal(storedWorkspace(home).machineId, 'local');
+  await until(() => storedWorkspace(home).type === 'codex');
+  assert.equal(storedWorkspace(home).machineId, 'wangcai-test.invalid');
   assert.equal(storedWorkspace(home).sessionId, undefined);
   await tabs(page).filter({ hasText: 'codex + 测试服务器' }).waitFor();
   // The machine cannot be reached, so the answer is refused in place and the directory stays unanswered.
   await prompt.locator('input').fill('~/project');
   await page.keyboard.press('Enter');
   await prompt.locator('.codex-prompt-error').waitFor();
-  assert.equal(storedWorkspace(home).codex.cwd, undefined);
+  assert.equal(storedWorkspace(home).cwd, undefined);
   await close();
 }));
 

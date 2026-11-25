@@ -6,9 +6,11 @@ export type Font = { family: string; size: number; lineHeight: number };
 export type CodexSettings = { enabled: boolean; command: string; remoteCommand: string; port: number; args: string[] };
 export type Settings = Profile & { font: Font; images: { maxCount: number }; codex: CodexSettings };
 export const maxImageBytes = 16 * 1024 * 1024;
-// A codex workspace runs its terminal locally (machineId 'local'); codex.machineId is the remote machine
-// whose app-server does the work, and codex.cwd is the remote directory. No cwd yet means the prompt is up.
-export interface Workspace { id: string; machineId: string; sessionId?: string; cwd?: string; name?: string; manual?: boolean; codex?: { machineId: string; cwd?: string } }
+// machineId is the machine the workspace works on and cwd its directory there, for every kind. A codex
+// workspace's terminal runs locally (its TUI talks to a remote app-server); no cwd yet means the prompt is up.
+export interface Workspace { id: string; machineId: string; sessionId?: string; cwd?: string; name?: string; manual?: boolean; type?: 'codex' }
+/** The machine a workspace's terminal runs on: codex drives a local TUI, every other kind a shell on its own machine. */
+export const terminalMachineOf = (workspace: Workspace) => workspace.type === 'codex' ? 'local' : workspace.machineId;
 export interface MachineState extends ConnectionState { machineId: string }
 export interface Config { workspaces: Workspace[]; active?: string }
 export interface WangcaiAPI {

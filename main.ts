@@ -8,6 +8,7 @@ import type { MachineConnection, WorkspaceActive, WorkspaceRow, WorkspaceStatus 
 import type { MainContext } from '@lengmoxxl/sdk/channel';
 import { registerFilePaths } from './file-links/paths';
 import { registerImages } from './images';
+import { terminalMachineOf } from './shared';
 import type { CodexSettings, Machine, MachineState, Workspace } from './shared';
 
 export const keys = { '<leader>a': { global: true, insert: true, desc: '切到工作区终端', event: 'core:show-view', data: { plugin: 'terminal-agent' } } };
@@ -152,7 +153,6 @@ export async function activate(context: MainContext) {
     // A workspace on a machine init.ts no longer names has nowhere to run, so it is dropped.
     for (const workspace of stored.workspaces) {
       if (typeof workspace?.id !== 'string' || !machines.some((machine) => machine.id === workspace.machineId) || kept.some((item) => item.id === workspace.id)) continue;
-      if (workspace.codex && !machines.some((machine) => machine.id === workspace.codex!.machineId)) continue;
       kept.push(workspace);
     }
     workspaces = kept;
@@ -298,7 +298,7 @@ export async function activate(context: MainContext) {
 
   /** The last codex workspace on a machine takes its app-server and forward down with it. */
   function releaseCodex(machineId: string) {
-    if (workspaces.some((workspace) => workspace.codex?.machineId === machineId)) return;
+    if (workspaces.some((workspace) => workspace.type === 'codex' && workspace.machineId === machineId)) return;
     const server = codexLive.get(machineId);
     if (server) { server.forward.kill(); codexLive.delete(machineId); }
     const stored = codexStored[machineId];
@@ -309,9 +309,8 @@ export async function activate(context: MainContext) {
   }
 
   async function ensureCodex(workspace: Workspace) {
-    const link = workspace.codex!;
-    if (!link.cwd) return;
-    const machine = machines.find((item) => item.id === link.machineId)!;
+    if (!workspace.cwd) return;
+    const machine = machines.find((item) => item.id === workspace.machineId)!;
     await open(machine.id);
     await open('local');
     const node = connections.get('local')!;
@@ -326,13 +325,27 @@ export async function activate(context: MainContext) {
     const args = settings.codex.args.filter((arg): arg is string => typeof arg === 'string');
     const pty = await node.pty.attach(created.id);
     // exec replaces the shell, so the session exits when codex does.
-    await pty.write(`exec ${settings.codex.command} --remote ${quote(`ws://127.0.0.1:${server.localPort}`)} --cd ${quote(link.cwd)}${args.map((arg) => ` ${quote(arg)}`).join(' ')}\n`);
+    await pty.write(`exec ${settings.codex.command} --remote ${quote(`ws://127.0.0.1:${server.localPort}`)} --cd ${quote(workspace.cwd)}${args.map((arg) => ` ${quote(arg)}`).join(' ')}\n`);
     await pty.detach();
+  }
+
+  /** Answers a codex workspace's directory: validate it on the machine, name the row, start the terminal. The caller opens the machine and saves. */
+  async function openCodex(workspace: Workspace, given: string) {
+    const trimmed = given.trim();
+    if (!trimmed) throw new Error('请输入远程目录');
+    const node = connections.get(workspace.machineId)!;
+    const home = await homeOf(workspace.machineId, node);
+    const path = trimmed === '~' && home ? home : trimmed.startsWith('~/') && home ? posix.join(home, trimmed.slice(2)) : trimmed;
+    if (!posix.isAbsolute(path)) throw new Error('请输入远程绝对路径');
+    if (!(await node.fs.stat(path))?.isDirectory) throw new Error(`远程目录不存在: ${path}`);
+    workspace.cwd = posix.resolve(path);
+    if (!workspace.manual) workspace.name = posix.basename(workspace.cwd) || '/';
+    await ensure(workspace);
   }
 
   /** A workspace needs a live terminal on a connected machine; a dead or missing one is replaced. */
   async function ensure(workspace: Workspace) {
-    if (workspace.codex) return ensureCodex(workspace);
+    if (workspace.type === 'codex') return ensureCodex(workspace);
     const node = connections.get(workspace.machineId)!;
     const session = workspace.sessionId === undefined ? undefined : (await node.pty.list()).find((item) => item.id === workspace.sessionId);
     if (session && session.exit_code === null) return;
@@ -343,7 +356,7 @@ export async function activate(context: MainContext) {
   }
 
   function sessionFor(workspace: Workspace) {
-    return states.get(workspace.machineId)?.sessions.find((item) => item.id === workspace.sessionId);
+    return states.get(terminalMachineOf(workspace))?.sessions.find((item) => item.id === workspace.sessionId);
   }
 
   function rows(): WorkspaceRow[] {
@@ -352,7 +365,7 @@ export async function activate(context: MainContext) {
       return {
         id: workspace.id,
         label: nameOf(workspace),
-        machine: machines.find((machine) => machine.id === (workspace.codex?.machineId ?? workspace.machineId))!.name,
+        machine: machines.find((machine) => machine.id === workspace.machineId)!.name,
         running: session?.exit_code === null,
         status: drawnStatus(workspace.id),
       };
@@ -391,11 +404,11 @@ export async function activate(context: MainContext) {
 
   function hostOf(sessionId: string) {
     const workspace = workspaces.find((workspace) => workspace.sessionId === sessionId);
-    // Codex prints remote paths from a local session: files resolve on the remote machine, in the remote cwd.
-    const machine = machines.find((machine) => machine.id === (workspace?.codex?.machineId ?? workspace?.machineId));
+    // A codex workspace's shell is local, so its paths resolve in the workspace's own cwd rather than the shell's.
+    const machine = machines.find((machine) => machine.id === workspace?.machineId);
     const node = machine && connections.get(machine.id);
     if (!machine || !node) return undefined;
-    return workspace?.codex ? { machine, node, cwd: workspace.codex.cwd } : { machine, node };
+    return workspace?.type === 'codex' ? { machine, node, cwd: workspace.cwd } : { machine, node };
   }
 
   /** Runs one script on a machine, with the arguments it reads as `$1`, `$2`, and so on. */
@@ -421,9 +434,9 @@ export async function activate(context: MainContext) {
   async function* terminals() {
     for (const workspace of workspaces) {
       // A codex workspace's shell is local; its directory sits on the remote machine.
-      if (workspace.codex) {
-        const node = connections.get(workspace.codex.machineId);
-        if (node && workspace.codex.cwd) yield { workspace, node, cwd: workspace.codex.cwd };
+      if (workspace.type === 'codex') {
+        const node = connections.get(workspace.machineId);
+        if (node && workspace.cwd) yield { workspace, node, cwd: workspace.cwd };
         continue;
       }
       const node = connections.get(workspace.machineId);
@@ -456,7 +469,7 @@ export async function activate(context: MainContext) {
     let changed = false;
     for await (const { workspace, node, cwd } of terminals()) {
       // The local shell of a codex workspace says nothing about where its work happens.
-      if (workspace.codex) continue;
+      if (workspace.type === 'codex') continue;
       // A replacement terminal opens where this shell is.
       if (cwd !== workspace.cwd) {
         workspace.cwd = cwd;
@@ -514,20 +527,22 @@ export async function activate(context: MainContext) {
       error: failures.get(machine.id),
     })) : []),
   ]));
-  handlers.push(context.ui.handle('workspace-create', async ({ key, cwd }: { key: string; cwd?: string }) => {
-    if (key.startsWith('codex:')) {
-      const machine = machines.find((item) => item.id === key.slice('codex:'.length) && item.host);
-      if (!machine) throw new Error('Unknown machine');
-      // The pane asks for the remote directory; the terminal starts once it is answered.
-      const workspace: Workspace = { id: randomUUID(), machineId: 'local', name: `codex + ${machine.name}`, codex: { machineId: machine.id } };
+  handlers.push(context.ui.handle('workspace-create', async ({ key, cwd, type }: { key: string; cwd?: string; type?: string }) => {
+    // Menu entries carry the type in the key; a programmatic caller passes it beside a plain machine key.
+    const codex = type === 'codex' || key.startsWith('codex:');
+    const machineId = key.startsWith('codex:') ? key.slice('codex:'.length) : key;
+    const machine = machines.find((item) => item.id === machineId);
+    if (!machine) throw new Error('Unknown machine');
+    if (codex && !machine.host) throw new Error('codex 工作区需要远程机器');
+    // A codex workspace without a directory waits for the pane's prompt instead of connecting now.
+    if (codex && !cwd) {
+      const workspace: Workspace = { id: randomUUID(), machineId: machine.id, type: 'codex', name: `codex + ${machine.name}` };
       workspaces.push(workspace);
       active = workspace.id;
       save();
       await announce();
       return { id: workspace.id };
     }
-    const machine = machines.find((machine) => machine.id === key);
-    if (!machine) throw new Error('Unknown machine');
     try {
       await open(machine.id);
       failures.delete(machine.id);
@@ -535,37 +550,30 @@ export async function activate(context: MainContext) {
       failures.set(machine.id, error instanceof Error ? error.message : String(error));
       throw error;
     }
-    const workspace: Workspace = { id: randomUUID(), machineId: machine.id, cwd };
+    const workspace: Workspace = codex
+      ? { id: randomUUID(), machineId: machine.id, type: 'codex', name: `codex + ${machine.name}` }
+      : { id: randomUUID(), machineId: machine.id, cwd };
     workspaces.push(workspace);
     active = workspace.id;
-    await ensure(workspace);
+    if (codex) await openCodex(workspace, cwd!);
+    else await ensure(workspace);
     save();
     await announce();
     return { id: workspace.id };
   }));
   handlers.push(context.ui.handle('codex-open', async ({ id, cwd }: { id: string; cwd: string }) => {
     const workspace = workspaces.find((item) => item.id === id);
-    if (!workspace?.codex) throw new Error('Unknown workspace');
-    const given = cwd.trim();
-    if (!given) throw new Error('请输入远程目录');
-    const machine = machines.find((item) => item.id === workspace.codex!.machineId)!;
-    await open(machine.id);
-    const node = connections.get(machine.id)!;
-    const home = await homeOf(machine.id, node);
-    const path = given === '~' && home ? home : given.startsWith('~/') && home ? posix.join(home, given.slice(2)) : given;
-    if (!posix.isAbsolute(path)) throw new Error('请输入远程绝对路径');
-    if (!(await node.fs.stat(path))?.isDirectory) throw new Error(`远程目录不存在: ${path}`);
-    workspace.codex.cwd = posix.resolve(path);
-    if (!workspace.manual) workspace.name = posix.basename(workspace.codex.cwd) || '/';
-    await ensure(workspace);
+    if (!workspace || workspace.type !== 'codex') throw new Error('Unknown workspace');
+    await open(workspace.machineId);
+    await openCodex(workspace, cwd);
     save();
     await announce();
   }));
   handlers.push(context.ui.handle('codex-directories', async ({ id, path }: { id: string; path: string }) => {
     const workspace = workspaces.find((item) => item.id === id);
-    if (!workspace?.codex || !posix.isAbsolute(path)) return [];
-    await open(workspace.codex.machineId);
-    const entries = await connections.get(workspace.codex.machineId)!.fs.readDirectory(path).catch(() => []);
+    if (!workspace || workspace.type !== 'codex' || !posix.isAbsolute(path)) return [];
+    await open(workspace.machineId);
+    const entries = await connections.get(workspace.machineId)!.fs.readDirectory(path).catch(() => []);
     return entries.filter((entry) => entry.isDirectory).map((entry) => entry.name);
   }));
   handlers.push(context.ui.handle('workspace-select', async ({ id }: { id: string }) => {
@@ -587,12 +595,12 @@ export async function activate(context: MainContext) {
   handlers.push(context.ui.handle('workspace-close', async ({ id }: { id: string }) => {
     const workspace = workspaces.find((item) => item.id === id);
     if (!workspace) return;
-    const node = connections.get(workspace.machineId);
+    const node = connections.get(terminalMachineOf(workspace));
     if (workspace.sessionId !== undefined) {
       await node?.pty.close(workspace.sessionId).catch(() => {});
     }
     workspaces = workspaces.filter((item) => item.id !== id);
-    if (workspace.codex) releaseCodex(workspace.codex.machineId);
+    if (workspace.type === 'codex') releaseCodex(workspace.machineId);
     agentStates.delete(id);
     forget('workspace-status', id);
     forget('workspace-git', id);
