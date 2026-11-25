@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Terminal } from '@xterm/xterm';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
@@ -238,6 +238,50 @@ function TerminalPane({ context, session, active, connected, generation, profile
   </div>;
 }
 
+// A codex workspace before its directory is answered: ask for the remote path, completing from the remote fs.
+function CodexPrompt({ workspace }: { workspace: Workspace }) {
+  const [value, setValue] = useState('');
+  const [names, setNames] = useState<string[]>([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => { input.current?.focus(); }, []);
+  const cut = value.lastIndexOf('/');
+  const parent = value.slice(0, cut + 1);
+  const prefix = value.slice(cut + 1);
+  useEffect(() => {
+    if (!parent) { setNames([]); return; }
+    let alive = true;
+    const timer = setTimeout(() => {
+      api.codexDirectories(workspace.id, parent)
+        .then((list) => { if (alive) setNames(list.filter((name) => name.startsWith(prefix))); })
+        .catch(() => { if (alive) setNames([]); });
+    }, 150);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [parent, prefix]);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (busy || !value.trim()) return;
+    setBusy(true);
+    setError('');
+    api.codexOpen(workspace.id, value).catch((error: Error) => { setError(error.message); setBusy(false); });
+  };
+  return <div className="codex-prompt">
+    <form onSubmit={submit}>
+      <div className="codex-prompt-title">{workspace.name}</div>
+      <input ref={input} value={value} placeholder="远程工作目录，如 ~/project" spellCheck={false}
+        onChange={(event) => setValue(event.target.value)} disabled={busy} />
+      {names.length > 0 && !busy && <ul className="codex-prompt-list">
+        {names.map((name) => <li key={name}>
+          <button type="button" onClick={() => { setValue(`${parent}${name}/`); input.current?.focus(); }}>{name}/</button>
+        </li>)}
+      </ul>}
+      {error && <div className="codex-prompt-error">{error}</div>}
+      <div className="codex-prompt-hint">{busy ? '正在连接…' : `Enter 打开 · 目录在 ${workspace.codex!.machineId} 上`}</div>
+    </form>
+  </div>;
+}
+
 function App({ context, profile }: { context: UiContext; profile: Settings }) {
   const [config, setConfig] = useState<Config>();
   const [states, setStates] = useState<Record<string, MachineState>>({});
@@ -264,6 +308,9 @@ function App({ context, profile }: { context: UiContext; profile: Settings }) {
   return <div className="terminal-area">
     {errorMessage && <div className="error-banner"><span>{errorMessage}</span>{error && <button onClick={() => setError('')}>×</button>}</div>}
     {config.workspaces.map((workspace) => {
+      if (workspace.codex && !workspace.codex.cwd) {
+        return workspace.id === config.active ? <CodexPrompt key={workspace.id} workspace={workspace} /> : null;
+      }
       const session = sessionFor(workspace);
       return session ? <TerminalPane
         key={`${workspace.id}:${session.id}`}
@@ -292,6 +339,8 @@ export function mount(container: HTMLElement, context: UiContext) {
     activity: (sessionId) => context.ui.request('activity', { sessionId }),
     selectWorkspace: (id) => context.ui.request('workspace-select', { id }),
     address: (machineId) => context.ui.request('address', { machineId }),
+    codexOpen: (id, cwd) => context.ui.request('codex-open', { id, cwd }),
+    codexDirectories: (id, path) => context.ui.request('codex-directories', { id, path }),
     resolve: (sessionId, paths) => context.ui.request('resolve', { sessionId, paths }),
     image: (sessionId, dataUrl) => context.ui.request('image', { sessionId, dataUrl }),
     onConfig: (callback) => context.ui.subscribe('config', callback),

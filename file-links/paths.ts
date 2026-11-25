@@ -9,6 +9,8 @@ const resolvedTtl = 10_000;
 interface Host {
   machine: Machine;
   node: MachineConnection;
+  /** Where paths resolve when the session's own shell is not where the work happens (codex mode). */
+  cwd?: string;
 }
 
 /** A request names its session, which the plugin's main realm turns into the machine behind it. */
@@ -23,7 +25,7 @@ export function registerFilePaths(context: MainContext, hostOf: (sessionId: stri
         resolved.clear();
         resolvedUntil = Date.now() + resolvedTtl;
       }
-      const cwd = await host.node.pty.cwd(sessionId);
+      const cwd = host.cwd ?? await host.node.pty.cwd(sessionId);
       const wanted = paths.map((text) => ({
         text,
         key: `${host.machine.id}\0${cwd}\0${text}`,
@@ -45,7 +47,7 @@ export function registerFilePaths(context: MainContext, hostOf: (sessionId: stri
     context.ui.handle('click', async ({ sessionId, location }: { sessionId: string; location: Pick<FileClick, 'path' | 'line' | 'column'> }) => {
       const host = hostOf(sessionId);
       if (!host) throw new Error('Machine is not connected');
-      const path = posix.isAbsolute(location.path) ? posix.resolve(location.path) : posix.resolve(await host.node.pty.cwd(sessionId), location.path);
+      const path = posix.isAbsolute(location.path) ? posix.resolve(location.path) : posix.resolve(host.cwd ?? await host.node.pty.cwd(sessionId), location.path);
       const stat = await host.node.fs.stat(path);
       if (!stat) return;
       await context.global.publish('onclick', { type: stat.isDirectory ? 'directory' : 'file', machine: host.machine, ...location, path });
