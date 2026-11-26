@@ -415,11 +415,17 @@ export async function activate(context: MainContext) {
 
   function hostOf(sessionId: string) {
     const workspace = workspaces.find((workspace) => workspace.sessionId === sessionId);
-    // A codex workspace's shell is local, so its paths resolve in the workspace's own cwd rather than the shell's.
     const machine = machines.find((machine) => machine.id === workspace?.machineId);
     const node = machine && connections.get(machine.id);
     if (!machine || !node) return undefined;
-    return workspace?.type === 'codex' ? { machine, node, cwd: workspace.cwd } : { machine, node };
+    return { machine, node };
+  }
+
+  // The directory a session's paths resolve against, read from the workspace's own location rather than the pty here.
+  async function cwdOf(sessionId: string) {
+    const workspace = workspaces.find((workspace) => workspace.sessionId === sessionId);
+    if (!workspace) return undefined;
+    return (await located(workspace))?.cwd;
   }
 
   /** Runs one script on a machine, with the arguments it reads as `$1`, `$2`, and so on. */
@@ -521,7 +527,7 @@ export async function activate(context: MainContext) {
   const followTimer = setInterval(() => void follow(), FOLLOW_REFRESH);
   const gitTimer = setInterval(() => void readGit(), GIT_REFRESH);
 
-  handlers.push(...registerFilePaths(context, hostOf));
+  handlers.push(...registerFilePaths(context, hostOf, cwdOf));
   handlers.push(registerImages(context, hostOf, settings.images.maxCount));
   handlers.push(context.ui.handle('config', () => ({ workspaces, active })));
   handlers.push(context.ui.handle('workspaces', rows));

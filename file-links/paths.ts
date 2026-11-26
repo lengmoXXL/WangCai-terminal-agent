@@ -9,23 +9,22 @@ const resolvedTtl = 10_000;
 interface Host {
   machine: Machine;
   node: MachineConnection;
-  /** Where paths resolve when the session's own shell is not where the work happens (codex mode). */
-  cwd?: string;
 }
 
 /** A request names its session, which the plugin's main realm turns into the machine behind it. */
-export function registerFilePaths(context: MainContext, hostOf: (sessionId: string) => Host | undefined) {
+export function registerFilePaths(context: MainContext, hostOf: (sessionId: string) => Host | undefined, cwdOf: (sessionId: string) => Promise<string | undefined>) {
   const resolved = new Map<string, string | undefined>();
   let resolvedUntil = 0;
   return [
     context.ui.handle('resolve', async ({ sessionId, paths }: { sessionId: string; paths: string[] }) => {
       const host = hostOf(sessionId);
       if (!host) return {};
+      const cwd = await cwdOf(sessionId);
+      if (cwd === undefined) return {};
       if (Date.now() > resolvedUntil) {
         resolved.clear();
         resolvedUntil = Date.now() + resolvedTtl;
       }
-      const cwd = host.cwd ?? await host.node.pty.cwd(sessionId);
       const wanted = paths.map((text) => ({
         text,
         key: `${host.machine.id}\0${cwd}\0${text}`,
@@ -47,7 +46,9 @@ export function registerFilePaths(context: MainContext, hostOf: (sessionId: stri
     context.ui.handle('click', async ({ sessionId, location }: { sessionId: string; location: Pick<FileClick, 'path' | 'line' | 'column'> }) => {
       const host = hostOf(sessionId);
       if (!host) throw new Error('Machine is not connected');
-      const path = posix.isAbsolute(location.path) ? posix.resolve(location.path) : posix.resolve(host.cwd ?? await host.node.pty.cwd(sessionId), location.path);
+      const cwd = await cwdOf(sessionId);
+      if (cwd === undefined) throw new Error('Workspace has no directory yet');
+      const path = posix.isAbsolute(location.path) ? posix.resolve(location.path) : posix.resolve(cwd, location.path);
       const stat = await host.node.fs.stat(path);
       if (!stat) return;
       await context.global.publish('onclick', { type: stat.isDirectory ? 'directory' : 'file', machine: host.machine, ...location, path });
