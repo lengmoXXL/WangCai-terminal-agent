@@ -430,19 +430,22 @@ export async function activate(context: MainContext) {
     return value;
   }
 
+  // Where a workspace's work sits now, and the connection that reaches it: a codex workspace keeps the directory it
+  // was opened with on its remote machine, a shell workspace is wherever its shell is. Undefined when unreadable.
+  async function located(workspace: Workspace): Promise<{ node: MachineConnection; cwd: string } | undefined> {
+    const node = connections.get(workspace.machineId);
+    if (!node) return undefined;
+    if (workspace.type === 'codex') return workspace.cwd ? { node, cwd: workspace.cwd } : undefined;
+    if (!workspace.sessionId) return undefined;
+    const cwd = await node.pty.cwd(workspace.sessionId).catch(() => undefined);
+    return cwd === undefined ? undefined : { node, cwd };
+  }
+
   // Walks the workspaces whose terminal is up, each with the directory its shell is in now.
   async function* terminals() {
     for (const workspace of workspaces) {
-      // A codex workspace's shell is local; its directory sits on the remote machine.
-      if (workspace.type === 'codex') {
-        const node = connections.get(workspace.machineId);
-        if (node && workspace.cwd) yield { workspace, node, cwd: workspace.cwd };
-        continue;
-      }
-      const node = connections.get(workspace.machineId);
-      if (!node || !workspace.sessionId) continue;
-      const cwd = await node.pty.cwd(workspace.sessionId).catch(() => undefined);
-      if (cwd !== undefined) yield { workspace, node, cwd };
+      const at = await located(workspace);
+      if (at) yield { workspace, node: at.node, cwd: at.cwd };
     }
   }
 
@@ -513,6 +516,14 @@ export async function activate(context: MainContext) {
   handlers.push(context.ui.handle('workspaces', rows));
   handlers.push(context.ui.handle('states', () => [...states.values()]));
   handlers.push(context.ui.handle('activity', ({ sessionId }: { sessionId: string }) => sawOutput(sessionId)));
+  handlers.push(context.ui.handle('cwd', async ({ workspaceId }: { workspaceId: string }) => {
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    if (!workspace) throw new Error('Unknown workspace');
+    const at = await located(workspace);
+    if (at) return at.cwd;
+    if (!workspace.cwd) throw new Error('Workspace has no directory yet');
+    return workspace.cwd;
+  }));
   handlers.push(context.ui.handle('workspace-menu', () => [
     ...machines.map((machine) => ({
       key: machine.id,
