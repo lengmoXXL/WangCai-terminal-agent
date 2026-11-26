@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { createServer, type AddressInfo } from 'node:net';
 import { request } from 'node:http';
 import { join, posix } from 'node:path';
@@ -145,10 +144,10 @@ export async function activate(context: MainContext) {
     }, QUIET));
   }
 
-  // The app-server each remote machine runs for codex, as the daemon holds it: enough to attach again after a restart.
-  const codexStored: Record<string, { processId: string; port: number }> = {};
+  // The app-server and ssh forward a machine's codex uses, as the daemon holds them: enough to attach again after a restart.
+  const codexStored: Record<string, { processId: string; port: number; forwardId?: string; localPort?: number }> = {};
   if (existsSync(path)) {
-    const stored = JSON.parse(readFileSync(path, 'utf8')) as { workspaces: Workspace[]; codexServers?: Record<string, { processId: string; port: number }> };
+    const stored = JSON.parse(readFileSync(path, 'utf8')) as { workspaces: Workspace[]; codexServers?: Record<string, { processId: string; port: number; forwardId?: string; localPort?: number }> };
     const kept: Workspace[] = [];
     // A workspace on a machine init.ts no longer names has nowhere to run, so it is dropped.
     for (const workspace of stored.workspaces) {
@@ -216,7 +215,7 @@ export async function activate(context: MainContext) {
   }
 
   // Codex mode: the TUI runs locally, a remote `codex app-server` does the work.
-  type CodexServer = { processId: string; port: number; localPort: number; forward: ReturnType<typeof spawn> };
+  type CodexServer = { processId: string; port: number; localPort: number; forwardId: string; forwardExited: boolean };
   const codexLive = new Map<string, CodexServer>();
   const codexStarting = new Map<string, Promise<CodexServer>>();
 
@@ -241,13 +240,14 @@ export async function activate(context: MainContext) {
     });
   }
 
-  /** One app-server per machine, shared by its codex workspaces; the daemon owns the process, ssh carries the port. */
+  /** One app-server per machine, shared by its codex workspaces; the daemon holds it and the ssh forward, so both survive a restart. */
   function codexServer(machine: Machine, node: MachineConnection): Promise<CodexServer> {
     const live = codexLive.get(machine.id);
-    if (live && live.forward.exitCode === null) return Promise.resolve(live);
+    if (live && !live.forwardExited) return Promise.resolve(live);
     const starting = codexStarting.get(machine.id);
     if (starting) return starting;
     const result = (async () => {
+      const local = connections.get('local')!;
       let stderr = '';
       const note = (chunk: Uint8Array) => { stderr = (stderr + Buffer.from(chunk).toString()).slice(-2000); };
       let processId = codexStored[machine.id]?.processId;
@@ -264,30 +264,38 @@ export async function activate(context: MainContext) {
       proc.onExit(() => {
         exited = true;
         const server = codexLive.get(machine.id);
-        if (server?.processId === processId) { server.forward.kill(); codexLive.delete(machine.id); }
+        if (server?.processId === processId) { connections.get('local')?.subprocess.close(server.forwardId).catch(() => {}); codexLive.delete(machine.id); }
         if (codexStored[machine.id]?.processId === processId) { delete codexStored[machine.id]; save(); }
       });
-      const localPort = await freePort();
-      const forward = spawn('ssh', [
-        '-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=15',
-        '-L', `127.0.0.1:${localPort}:127.0.0.1:${port}`, machine.host!,
-      ], { stdio: ['ignore', 'ignore', 'pipe'] });
-      forward.stderr!.on('data', note);
-      const server: CodexServer = { processId: processId!, port, localPort, forward };
-      forward.once('exit', () => { if (codexLive.get(machine.id) === server) codexLive.delete(machine.id); });
+      let forwardId = codexStored[machine.id]?.forwardId;
+      let forward = forwardId === undefined ? undefined : await local.subprocess.attach(forwardId).catch(() => undefined);
+      let localPort: number;
+      if (!forward) {
+        localPort = await freePort();
+        forwardId = (await local.subprocess.spawn('ssh', [
+          '-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=15',
+          '-L', `127.0.0.1:${localPort}:127.0.0.1:${port}`, machine.host!,
+        ], { cwd: '/' })).id;
+        forward = await local.subprocess.attach(forwardId);
+      } else {
+        localPort = codexStored[machine.id]!.localPort!;
+      }
+      const server: CodexServer = { processId: processId!, port, localPort, forwardId: forwardId!, forwardExited: false };
+      forward.onData((event) => { if (event.stream === 'stderr') note(event.data); });
+      forward.onExit(() => { server.forwardExited = true; if (codexLive.get(machine.id) === server) codexLive.delete(machine.id); });
       try {
         const deadline = Date.now() + 30_000;
         while (!(await codexUp(localPort))) {
-          if (exited || forward.exitCode !== null || Date.now() > deadline) throw new Error(stderr.trim() || 'codex app-server 未就绪');
+          if (exited || server.forwardExited || Date.now() > deadline) throw new Error(stderr.trim() || 'codex app-server 未就绪');
           await new Promise((resolve) => setTimeout(resolve, 300));
         }
       } catch (error) {
-        forward.kill();
+        await local.subprocess.close(forwardId!).catch(() => {});
         if (spawned) await node.subprocess.close(processId!).catch(() => {});
         throw error;
       }
       codexLive.set(machine.id, server);
-      codexStored[machine.id] = { processId: processId!, port };
+      codexStored[machine.id] = { processId: processId!, port, forwardId: forwardId!, localPort };
       save();
       return server;
     })();
@@ -299,11 +307,11 @@ export async function activate(context: MainContext) {
   /** The last codex workspace on a machine takes its app-server and forward down with it. */
   function releaseCodex(machineId: string) {
     if (workspaces.some((workspace) => workspace.type === 'codex' && workspace.machineId === machineId)) return;
-    const server = codexLive.get(machineId);
-    if (server) { server.forward.kill(); codexLive.delete(machineId); }
+    codexLive.delete(machineId);
     const stored = codexStored[machineId];
     if (stored) {
       connections.get(machineId)?.subprocess.close(stored.processId).catch(() => {});
+      if (stored.forwardId) connections.get('local')?.subprocess.close(stored.forwardId).catch(() => {});
       delete codexStored[machineId];
     }
   }
@@ -316,8 +324,11 @@ export async function activate(context: MainContext) {
     const node = connections.get('local')!;
     const live = codexLive.get(machine.id);
     const session = workspace.sessionId === undefined ? undefined : (await node.pty.list()).find((item) => item.id === workspace.sessionId);
-    if (live && live.forward.exitCode === null && session && session.exit_code === null) return;
+    if (live && !live.forwardExited && session && session.exit_code === null) return;
+    const prior = codexStored[machine.id];
     const server = await codexServer(machine, connections.get(machine.id)!);
+    // The app-server, forward and TUI are daemon-held: if all survived the restart, rejoin rather than relaunch.
+    if (session && session.exit_code === null && server.processId === prior?.processId && server.forwardId === prior?.forwardId) return;
     if (workspace.sessionId !== undefined) await node.pty.close(workspace.sessionId).catch(() => {});
     const created = await node.pty.create({ rows: 24, cols: 80 }, { label: `${nameOf(workspace)} - codex` });
     workspace.sessionId = created.id;
@@ -661,7 +672,6 @@ export async function activate(context: MainContext) {
     quietTimers.clear();
     for (const remove of handlers) remove();
     for (const id of new Set([...connections.keys(), ...pending.keys()])) disconnect(id);
-    // The forwards are ours; the app-servers belong to the daemon and are attached again on the next run.
-    for (const server of codexLive.values()) server.forward.kill();
+    // The app-servers and forwards belong to the daemon and are attached again on the next run.
   };
 }
