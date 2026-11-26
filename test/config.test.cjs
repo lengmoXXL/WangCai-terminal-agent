@@ -25,7 +25,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
   await until(() => page.evaluate(() => Boolean(window.wangcai)));
   assert.deepEqual(await page.evaluate(async () => (await window.wangcai.call('plugins')).map(({ id, config }) => [id, config])), [
     ['terminal', { font: { family: 'Config Mono', size: 20, lineHeight: 1.5 } }],
-    ['terminal-agent', { font: { family: 'Config UI Font', size: 13, lineHeight: 1 }, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }], images: { maxCount: 100 }, codex: { enabled: false, command: 'codex', remoteCommand: 'codex', port: 4500, args: [] } }],
+    ['terminal-agent', { font: { family: 'Config UI Font', size: 13, lineHeight: 1 }, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }], images: { maxCount: 100 }, codex: { enabled: false, command: 'codex', remoteCommand: 'codex', args: [] } }],
   ]);
   assert.deepEqual(await page.evaluate(() => {
     const body = getComputedStyle(document.body);
