@@ -30,7 +30,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
   assert.deepEqual(await page.evaluate(() => {
     const body = getComputedStyle(document.body);
     return [body.backgroundColor, body.color, body.fontFamily, getComputedStyle(document.documentElement).getPropertyValue('--wc-border'), document.documentElement.style.colorScheme];
-  }), ['rgb(247, 248, 250)', 'rgb(32, 48, 64)', '"DejaVuSansM Nerd Font Mono", monospace', '#333536', 'light']);
+  }), ['rgb(247, 248, 250)', 'rgb(32, 48, 64)', 'Menlo, monospace', '#333536', 'light']);
   const menu = page.locator('#workspace-row-menu');
   await openWorkspaceMenu(page);
   const server = menu.getByRole('menuitem', { name: '测试服务器' });
