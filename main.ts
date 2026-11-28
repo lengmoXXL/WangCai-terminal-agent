@@ -236,7 +236,8 @@ export async function activate(context: MainContext) {
     if (starting) return starting;
     const result = (async () => {
       // The default managed daemon is durable and shared; starting it is idempotent and reports its control socket.
-      const started = await node.subprocess.exec(settings.codex.remoteCommand, ['app-server', 'daemon', 'start'], { cwd: '/', env: machine.env });
+      // The host injects the machine's environment with its variables expanded; passing it raw here would override that.
+      const started = await node.subprocess.exec(settings.codex.remoteCommand, ['app-server', 'daemon', 'start'], { cwd: '/' });
       const socketPath = started.code === 0 ? (JSON.parse(started.stdout.toString()) as { socketPath?: string }).socketPath : undefined;
       if (!socketPath) throw new Error(started.stderr.toString().trim() || 'codex daemon 未返回 socket');
       if (!machine.host) {
