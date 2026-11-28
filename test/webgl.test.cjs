@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { activeTerminal, closeWorkspace, createWorkspace, openWorkspaceMenu, run, runUntilShown, screen, tabs } = require('./terminal-agent-ui.cjs');
+const { activeTerminal, closeWorkspace, createWorkspace, openWorkspaceMenu, run, runUntilShown, screen, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
 
 const lists = { workspaces: ['terminal-agent'] };
 const canvas = '.xterm-screen > canvas:last-of-type';
@@ -62,6 +62,29 @@ test('WebGL is on by default, reuses renderers across switches and preserves his
   await closeWorkspace(tabs(page).last());
   await until(() => lastContext.evaluate((context) => context.isContextLost()));
   assert.equal(await domRecreated.evaluate((read) => read()), false, 'DOM renderer created during close');
+}));
+
+test('the reopen button receives clicks over a WebGL terminal', { timeout: 180000 }, (t) => withWindow('wangcai-webgl-reopen', lists, async ({ home, page }) => {
+  await page.locator('.workspaces').waitFor();
+  if (!(await page.evaluate(() => {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    return Boolean(gl);
+  }))) {
+    t.skip('WebGL is unavailable');
+    return;
+  }
+  await openWorkspaceMenu(page);
+  await page.getByRole('menuitem', { name: '新建 本机', exact: true }).click();
+  await activeTerminal(page).locator(canvas).waitFor();
+  const previous = storedWorkspace(home).sessionId;
+
+  await run(page, 'exit');
+  const reopen = page.getByRole('button', { name: '重新打开' });
+  await reopen.click();
+  await reopen.waitFor({ state: 'hidden' });
+  await until(() => storedWorkspace(home).sessionId !== previous);
+  await activeTerminal(page).locator(canvas).waitFor();
 }));
 
 test('a failed WebGL initialization leaves the DOM renderer usable', { timeout: 180000 }, () => withWindow('wangcai-webgl-fallback', lists, async ({ page }) => {
