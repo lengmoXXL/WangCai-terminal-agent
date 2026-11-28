@@ -32,6 +32,9 @@ const concat = (chunks: Uint8Array[]) => {
   return joined;
 };
 
+const WEBGL_RENDERER_LIMIT = 4;
+const recentWebgl = new Set<() => void>();
+
 function TerminalPane({ context, session, active, connected, generation, profile, machineId }: {
   context: UiContext; session: Session; active: boolean; connected: boolean; generation: number; profile: Settings; machineId: string;
 }) {
@@ -199,47 +202,56 @@ function TerminalPane({ context, session, active, connected, generation, profile
     const observer = new ResizeObserver(fitGrid);
     observer.observe(surface);
     let tryWebgl = profile.gpuAcceleration;
-    let webgl: { renderer: WebglAddon; canvases: HTMLCanvasElement[] } | undefined;
+    let webgl: WebglAddon | undefined;
     const releaseWebgl = () => {
       if (!webgl) return;
-      const { renderer, canvases } = webgl;
+      // Detached canvases can still hold GPU contexts, and failed setup can leave canvases attached.
+      const canvases = surface.querySelectorAll<HTMLCanvasElement>('.xterm-screen > canvas');
+      recentWebgl.delete(releaseWebgl);
+      webgl.dispose();
       webgl = undefined;
-      renderer.dispose();
-      // A detached canvas can still hold a GPU context when the next workspace needs one.
       for (const canvas of canvases) {
         const gl = canvas.getContext('webgl2');
         if (gl && !gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext();
         canvas.remove();
       }
     };
-    // A hidden pane keeps its buffer fed. Only the visible pane needs a GPU context.
+    const fallbackWebgl = () => {
+      tryWebgl = false;
+      releaseWebgl();
+      fitGrid();
+    };
+    const loadWebgl = () => {
+      // A pane can be hidden before the observer delivers the entry that cancels this task.
+      if (!surface.offsetWidth || !surface.offsetHeight) return;
+      if (recentWebgl.size === WEBGL_RENDERER_LIMIT) {
+        const [releaseOldest] = recentWebgl;
+        releaseOldest();
+      }
+      try {
+        webgl = new WebglAddon();
+        webgl.onContextLoss(fallbackWebgl);
+        term.loadAddon(webgl);
+      } catch {
+        fallbackWebgl();
+        return;
+      }
+      recentWebgl.add(releaseWebgl);
+      fitGrid();
+    };
+    let webglTask = 0;
+    // xterm pauses drawing while hidden. Keep recent renderers and let a cold pane draw with the DOM first.
     const shown = new IntersectionObserver((entries) => {
       if (!alive) return;
       visible = entries.at(-1)!.isIntersecting;
-      if (!visible) {
-        releaseWebgl();
-        return;
+      cancelIdleCallback(webglTask);
+      if (!visible || !tryWebgl) return;
+      if (webgl) {
+        recentWebgl.delete(releaseWebgl);
+        recentWebgl.add(releaseWebgl);
+      } else {
+        webglTask = requestIdleCallback(loadWebgl);
       }
-      if (!tryWebgl || webgl) return;
-      const canvasSelector = '.xterm-screen > canvas';
-      const existing = new Set(surface.querySelectorAll(canvasSelector));
-      try {
-        const renderer = new WebglAddon();
-        webgl = { renderer, canvases: [] };
-        renderer.onContextLoss(() => {
-          tryWebgl = false;
-          releaseWebgl();
-          fitGrid();
-        });
-        term.loadAddon(renderer);
-      } catch {
-        tryWebgl = false;
-      }
-      if (!webgl) return;
-      // The addon can append canvases before its shader setup throws.
-      webgl.canvases = [...surface.querySelectorAll<HTMLCanvasElement>(canvasSelector)].filter((canvas) => !existing.has(canvas));
-      if (!tryWebgl) releaseWebgl();
-      fitGrid();
     });
     shown.observe(surface);
     const offTheme = context.global.subscribe<Theme>('theme', (next) => { term.options.theme = xtermTheme(next); });
@@ -247,6 +259,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
       alive = false;
       clearTimeout(retry);
       cancelAnimationFrame(frame);
+      cancelIdleCallback(webglTask);
       surface.removeEventListener('paste', paste, true);
       input.dispose(); resize.dispose(); observer.disconnect(); shown.disconnect(); offTheme();
       releaseWebgl();
