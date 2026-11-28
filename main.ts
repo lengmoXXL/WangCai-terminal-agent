@@ -23,6 +23,7 @@ export const config = {
   codex: {
     enabled: { type: 'boolean', default: false },
     command: { type: 'string', default: 'codex' },
+    // The codex app-server command, run on the workspace's machine (local or remote); the key name is kept for existing configs.
     remoteCommand: { type: 'string', default: 'codex' },
     args: { type: 'array', default: [] },
   },
@@ -212,8 +213,8 @@ export async function activate(context: MainContext) {
     return workspace.name ?? `工作区 ${workspaces.indexOf(workspace) + 1}`;
   }
 
-  // Codex mode: the TUI runs locally, a remote `codex app-server` does the work.
-  type CodexServer = { localSocket: string; forwardId: string; forwardExited: boolean };
+  // Codex mode: the TUI runs locally, a local or remote `codex app-server` does the work.
+  type CodexServer = { localSocket: string; forward?: { id: string; exited: boolean } };
   const codexLive = new Map<string, CodexServer>();
   const codexStarting = new Map<string, Promise<CodexServer>>();
 
@@ -227,20 +228,26 @@ export async function activate(context: MainContext) {
     });
   }
 
-  /** The machine's default codex daemon serves its workspaces; the local daemon holds the ssh forward, so it survives a restart. */
+  /** The machine's default codex daemon serves its workspaces; a remote one is reached through an ssh forward the local daemon holds, so it survives a restart. */
   function codexServer(machine: Machine, node: MachineConnection): Promise<CodexServer> {
     const live = codexLive.get(machine.id);
-    if (live && !live.forwardExited) return Promise.resolve(live);
+    if (live && !live.forward?.exited) return Promise.resolve(live);
     const starting = codexStarting.get(machine.id);
     if (starting) return starting;
     const result = (async () => {
-      const local = connections.get('local')!;
-      let stderr = '';
-      const note = (chunk: Uint8Array) => { stderr = (stderr + Buffer.from(chunk).toString()).slice(-2000); };
       // The default managed daemon is durable and shared; starting it is idempotent and reports its control socket.
       const started = await node.subprocess.exec(settings.codex.remoteCommand, ['app-server', 'daemon', 'start'], { cwd: '/', env: machine.env });
       const socketPath = started.code === 0 ? (JSON.parse(started.stdout.toString()) as { socketPath?: string }).socketPath : undefined;
       if (!socketPath) throw new Error(started.stderr.toString().trim() || 'codex daemon 未返回 socket');
+      if (!machine.host) {
+        // The local daemon's control socket is already here; the TUI connects to it without a forward.
+        const server: CodexServer = { localSocket: socketPath };
+        codexLive.set(machine.id, server);
+        return server;
+      }
+      const local = connections.get('local')!;
+      let stderr = '';
+      const note = (chunk: Uint8Array) => { stderr = (stderr + Buffer.from(chunk).toString()).slice(-2000); };
       let forwardId = codexStored[machine.id]?.forwardId;
       let forward = forwardId === undefined ? undefined : await local.subprocess.attach(forwardId).catch(() => undefined);
       let localSocket: string;
@@ -256,13 +263,14 @@ export async function activate(context: MainContext) {
       } else {
         localSocket = codexStored[machine.id]!.localSocket!;
       }
-      const server: CodexServer = { localSocket, forwardId: forwardId!, forwardExited: false };
+      const forwardState = { id: forwardId!, exited: false };
+      const server: CodexServer = { localSocket, forward: forwardState };
       forward.onData((event) => { if (event.stream === 'stderr') note(event.data); });
-      forward.onExit(() => { server.forwardExited = true; if (codexLive.get(machine.id) === server) codexLive.delete(machine.id); });
+      forward.onExit(() => { forwardState.exited = true; if (codexLive.get(machine.id) === server) codexLive.delete(machine.id); });
       try {
         const deadline = Date.now() + 30_000;
         while (!(await codexUp(localSocket))) {
-          if (server.forwardExited || Date.now() > deadline) throw new Error(stderr.trim() || 'codex app-server 未就绪');
+          if (forwardState.exited || Date.now() > deadline) throw new Error(stderr.trim() || 'codex app-server 未就绪');
           await new Promise((resolve) => setTimeout(resolve, 300));
         }
       } catch (error) {
@@ -298,11 +306,11 @@ export async function activate(context: MainContext) {
     const node = connections.get('local')!;
     const live = codexLive.get(machine.id);
     const session = workspace.sessionId === undefined ? undefined : (await node.pty.list()).find((item) => item.id === workspace.sessionId);
-    if (live && !live.forwardExited && session && session.exit_code === null) return;
+    if (live && !live.forward?.exited && session && session.exit_code === null) return;
     const prior = codexStored[machine.id];
     const server = await codexServer(machine, connections.get(machine.id)!);
-    // The forward and the TUI are daemon-held: if both survived the restart, rejoin rather than relaunch.
-    if (session && session.exit_code === null && server.forwardId === prior?.forwardId) return;
+    // The TUI and any remote forward are daemon-held: if they survived the restart, rejoin rather than relaunch.
+    if (session && session.exit_code === null && (server.forward === undefined || server.forward.id === prior?.forwardId)) return;
     if (workspace.sessionId !== undefined) await node.pty.close(workspace.sessionId).catch(() => {});
     const created = await node.pty.create({ rows: 24, cols: 80 }, { label: `${nameOf(workspace)} - codex` });
     workspace.sessionId = created.id;
@@ -317,13 +325,11 @@ export async function activate(context: MainContext) {
   /** Answers a codex workspace's directory: validate it on the machine, name the row, start the terminal. The caller opens the machine and saves. */
   async function openCodex(workspace: Workspace, given: string) {
     const trimmed = given.trim();
-    if (!trimmed) throw new Error('请输入远程目录');
+    if (!trimmed) throw new Error('请输入工作目录');
     const node = connections.get(workspace.machineId)!;
-    const home = await homeOf(workspace.machineId, node);
-    const path = trimmed === '~' && home ? home : trimmed.startsWith('~/') && home ? posix.join(home, trimmed.slice(2)) : trimmed;
-    if (!posix.isAbsolute(path)) throw new Error('请输入远程绝对路径');
-    if (!(await node.fs.stat(path))?.isDirectory) throw new Error(`远程目录不存在: ${path}`);
-    workspace.cwd = posix.resolve(path);
+    const path = await machinePath(workspace.machineId, trimmed);
+    if (!(await node.fs.stat(path))?.isDirectory) throw new Error(`目录不存在: ${path}`);
+    workspace.cwd = path;
     if (!workspace.manual) workspace.name = posix.basename(workspace.cwd) || '/';
     await ensure(workspace);
   }
@@ -421,8 +427,15 @@ export async function activate(context: MainContext) {
     return value;
   }
 
+  /** Interpret a typed directory on the machine: expand ~ and resolve against its home, so opening and completion read it the same way. */
+  async function machinePath(machineId: string, input: string): Promise<string> {
+    const home = await homeOf(machineId, connections.get(machineId)!);
+    const expanded = input === '~' && home ? home : input.startsWith('~/') && home ? posix.join(home, input.slice(2)) : input;
+    return posix.resolve(home || '/', expanded);
+  }
+
   // Where a workspace's work sits now, and the connection that reaches it: a codex workspace keeps the directory it
-  // was opened with on its remote machine, a shell workspace is wherever its shell is. Undefined when unreadable.
+  // was opened with on its machine, a shell workspace is wherever its shell is. Undefined when unreadable.
   async function located(workspace: Workspace): Promise<{ node: MachineConnection; cwd: string } | undefined> {
     const node = connections.get(workspace.machineId);
     if (!node) return undefined;
@@ -522,7 +535,7 @@ export async function activate(context: MainContext) {
       hint: machine.host,
       error: failures.get(machine.id),
     })),
-    ...(settings.codex.enabled ? machines.filter((machine) => machine.host).map((machine) => ({
+    ...(settings.codex.enabled ? machines.map((machine) => ({
       key: `codex:${machine.id}`,
       label: `codex + ${machine.name}`,
       hint: machine.host,
@@ -535,7 +548,6 @@ export async function activate(context: MainContext) {
     const machineId = key.startsWith('codex:') ? key.slice('codex:'.length) : key;
     const machine = machines.find((item) => item.id === machineId);
     if (!machine) throw new Error('Unknown machine');
-    if (codex && !machine.host) throw new Error('codex 工作区需要远程机器');
     // A codex workspace without a directory waits for the pane's prompt instead of connecting now.
     if (codex && !cwd) {
       const workspace: Workspace = { id: randomUUID(), machineId: machine.id, type: 'codex', name: `codex + ${machine.name}` };
@@ -573,9 +585,10 @@ export async function activate(context: MainContext) {
   }));
   handlers.push(context.ui.handle('codex-directories', async ({ id, path }: { id: string; path: string }) => {
     const workspace = workspaces.find((item) => item.id === id);
-    if (!workspace || workspace.type !== 'codex' || !posix.isAbsolute(path)) return [];
+    if (!workspace || workspace.type !== 'codex') return [];
     await open(workspace.machineId);
-    const entries = await connections.get(workspace.machineId)!.fs.readDirectory(path).catch(() => []);
+    const node = connections.get(workspace.machineId)!;
+    const entries = await node.fs.readDirectory(await machinePath(workspace.machineId, path)).catch(() => []);
     return entries.filter((entry) => entry.isDirectory).map((entry) => entry.name);
   }));
   handlers.push(context.ui.handle('workspace-select', async ({ id }: { id: string }) => {

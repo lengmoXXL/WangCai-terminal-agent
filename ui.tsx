@@ -238,9 +238,9 @@ function TerminalPane({ context, session, active, connected, generation, profile
   </div>;
 }
 
-// A codex workspace before its directory is answered: ask for the remote path, completing from the remote fs.
+// A codex workspace before its directory is answered: ask for the directory, completing from the machine's fs.
 function CodexPrompt({ workspace }: { workspace: Workspace }) {
-  const [value, setValue] = useState('');
+  const [value, setValue] = useState('~/');
   const [names, setNames] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -266,18 +266,24 @@ function CodexPrompt({ workspace }: { workspace: Workspace }) {
     setError('');
     api.codexOpen(workspace.id, value).catch((error: Error) => { setError(error.message); setBusy(false); });
   };
+  const complete = () => {
+    if (names.length === 0) return;
+    if (names.length === 1) { setValue(`${parent}${names[0]}/`); return; }
+    const common = names.reduce((left, right) => { let index = 0; while (index < left.length && index < right.length && left[index] === right[index]) index++; return left.slice(0, index); });
+    if (common.length > prefix.length) setValue(`${parent}${common}`);
+  };
   return <div className="codex-prompt">
     <form onSubmit={submit}>
       <div className="codex-prompt-title">{workspace.name}</div>
-      <input ref={input} value={value} placeholder="远程工作目录，如 ~/project" spellCheck={false}
-        onChange={(event) => setValue(event.target.value)} disabled={busy} />
+      <input ref={input} value={value} placeholder="工作目录，如 ~/project" spellCheck={false}
+        onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Tab') { event.preventDefault(); complete(); } }} disabled={busy} />
       {names.length > 0 && !busy && <ul className="codex-prompt-list">
         {names.map((name) => <li key={name}>
           <button type="button" onClick={() => { setValue(`${parent}${name}/`); input.current?.focus(); }}>{name}/</button>
         </li>)}
       </ul>}
       {error && <div className="codex-prompt-error">{error}</div>}
-      <div className="codex-prompt-hint">{busy ? '正在连接…' : `Enter 打开 · 目录在 ${workspace.machineId} 上`}</div>
+      <div className="codex-prompt-hint">{busy ? '正在连接…' : 'Enter 打开 · Tab 补全'}</div>
     </form>
   </div>;
 }

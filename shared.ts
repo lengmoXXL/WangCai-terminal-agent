@@ -7,7 +7,7 @@ export type CodexSettings = { enabled: boolean; command: string; remoteCommand: 
 export type Settings = Profile & { font: Font; images: { maxCount: number }; codex: CodexSettings };
 export const maxImageBytes = 16 * 1024 * 1024;
 // machineId is the machine the workspace works on and cwd its directory there, for every kind. A codex
-// workspace's terminal runs locally (its TUI talks to a remote app-server); no cwd yet means the prompt is up.
+// workspace's terminal runs locally (its TUI talks to a codex app-server); no cwd yet means the prompt is up.
 export interface Workspace { id: string; machineId: string; sessionId?: string; cwd?: string; name?: string; manual?: boolean; type?: 'codex' }
 /** The machine a workspace's terminal runs on: codex drives a local TUI, every other kind a shell on its own machine. */
 export const terminalMachineOf = (workspace: Workspace) => workspace.type === 'codex' ? 'local' : workspace.machineId;
