@@ -3,12 +3,12 @@ const assert = require('node:assert/strict');
 const { existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { until, withWindow } = require('@lengmoxxl/wangcai-testkit');
-const { activeTerminal, createWorkspace, openWorkspaceMenu, run, runUntilShown, screen, tabs } = require('./terminal-agent-ui.cjs');
+const { activeTerminal, closeWorkspace, createWorkspace, openWorkspaceMenu, run, runUntilShown, screen, tabs } = require('./terminal-agent-ui.cjs');
 
 const lists = { workspaces: ['terminal-agent'] };
 const canvas = '.xterm-screen > canvas:last-of-type';
 
-test('WebGL is on by default, reuses recent renderers and preserves history on context loss', { timeout: 180000 }, (t) => withWindow('wangcai-webgl', lists, async ({ home, page }) => {
+test('WebGL is on by default, reuses renderers across switches and preserves history on context loss', { timeout: 180000 }, (t) => withWindow('wangcai-webgl', lists, async ({ home, page }) => {
   await page.locator('.workspaces').waitFor();
   if (!(await page.evaluate(() => {
     const gl = document.createElement('canvas').getContext('webgl2');
@@ -35,16 +35,11 @@ test('WebGL is on by default, reuses recent renderers and preserves history on c
   await run(page, `printf 'GPU_%s\\n' history; touch '${marker.replaceAll("'", "'\\''")}'`);
   await until(() => existsSync(marker));
 
-  await add();
-  const secondContext = await activeTerminal(page).locator(canvas).evaluateHandle((element) => element.getContext('webgl2'));
+  for (let i = 1; i < 6; i++) await add();
+  assert.equal(await page.locator(canvas).count(), 6);
   await tabs(page).first().click();
-  assert.ok(await firstCanvas.evaluate((element, context) => element.getContext('webgl2') === context, firstContext), 'switching reuses the first context');
-
-  for (let i = 0; i < 3; i++) await add();
-  assert.ok(await secondContext.evaluate((context) => context.isContextLost()), 'the fifth renderer evicts the least recently used context');
-  assert.equal(await firstContext.evaluate((context) => context.isContextLost()), false);
-  assert.equal(await page.locator(canvas).count(), 4);
-  await tabs(page).first().click();
+  assert.ok(await firstCanvas.evaluate((element, context) =>
+    element.getContext('webgl2') === context && !context.isContextLost(), firstContext), 'switching reuses the first context');
 
   await firstCanvas.evaluate((element) => element.getContext('webgl2').getExtension('WEBGL_lose_context').loseContext());
   await until(async () => (await screen(page)).includes('GPU_history'));
@@ -52,7 +47,21 @@ test('WebGL is on by default, reuses recent renderers and preserves history on c
     surface.querySelector('.xterm-screen').getBoundingClientRect().right - surface.getBoundingClientRect().right);
   assert.ok(overflow <= 0, `the fallback grid extends ${overflow}px past the pane`);
   await runUntilShown(page, "printf 'GPU_%s\\n' recovered", 'GPU_recovered');
-  assert.equal(sockets, 5, 'one socket per workspace');
+  assert.equal(sockets, 6, 'one socket per workspace');
+
+  const lastPane = panes.last();
+  const lastContext = await lastPane.locator(canvas).evaluateHandle((element) => element.getContext('webgl2'));
+  const domRecreated = await lastPane.evaluateHandle((pane) => {
+    let recreated = false;
+    const observer = new MutationObserver((entries) => {
+      recreated ||= entries.some(({ addedNodes }) => [...addedNodes].some((node) => node.classList?.contains('xterm-rows')));
+    });
+    observer.observe(pane, { childList: true, subtree: true });
+    return () => { observer.disconnect(); return recreated; };
+  });
+  await closeWorkspace(tabs(page).last());
+  await until(() => lastContext.evaluate((context) => context.isContextLost()));
+  assert.equal(await domRecreated.evaluate((read) => read()), false, 'DOM renderer created during close');
 }));
 
 test('a failed WebGL initialization leaves the DOM renderer usable', { timeout: 180000 }, () => withWindow('wangcai-webgl-fallback', lists, async ({ page }) => {

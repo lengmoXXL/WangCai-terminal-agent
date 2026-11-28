@@ -32,9 +32,6 @@ const concat = (chunks: Uint8Array[]) => {
   return joined;
 };
 
-const WEBGL_RENDERER_LIMIT = 4;
-const recentWebgl = new Set<() => void>();
-
 function TerminalPane({ context, session, active, connected, generation, profile, machineId }: {
   context: UiContext; session: Session; active: boolean; connected: boolean; generation: number; profile: Settings; machineId: string;
 }) {
@@ -203,12 +200,10 @@ function TerminalPane({ context, session, active, connected, generation, profile
     observer.observe(surface);
     let tryWebgl = profile.gpuAcceleration;
     let webgl: WebglAddon | undefined;
-    const releaseWebgl = () => {
-      if (!webgl) return;
+    const disposeWithWebgl = (dispose: () => void) => {
       // Detached canvases can still hold GPU contexts, and failed setup can leave canvases attached.
-      const canvases = surface.querySelectorAll<HTMLCanvasElement>('.xterm-screen > canvas');
-      recentWebgl.delete(releaseWebgl);
-      webgl.dispose();
+      const canvases = webgl ? surface.querySelectorAll<HTMLCanvasElement>('.xterm-screen > canvas') : [];
+      dispose();
       webgl = undefined;
       for (const canvas of canvases) {
         const gl = canvas.getContext('webgl2');
@@ -218,16 +213,12 @@ function TerminalPane({ context, session, active, connected, generation, profile
     };
     const fallbackWebgl = () => {
       tryWebgl = false;
-      releaseWebgl();
+      disposeWithWebgl(() => webgl?.dispose());
       fitGrid();
     };
     const loadWebgl = () => {
       // A pane can be hidden before the observer delivers the entry that cancels this task.
       if (!surface.offsetWidth || !surface.offsetHeight) return;
-      if (recentWebgl.size === WEBGL_RENDERER_LIMIT) {
-        const [releaseOldest] = recentWebgl;
-        releaseOldest();
-      }
       try {
         webgl = new WebglAddon();
         webgl.onContextLoss(fallbackWebgl);
@@ -236,22 +227,15 @@ function TerminalPane({ context, session, active, connected, generation, profile
         fallbackWebgl();
         return;
       }
-      recentWebgl.add(releaseWebgl);
       fitGrid();
     };
     let webglTask = 0;
-    // xterm pauses drawing while hidden. Keep recent renderers and let a cold pane draw with the DOM first.
     const shown = new IntersectionObserver((entries) => {
       if (!alive) return;
       visible = entries.at(-1)!.isIntersecting;
+      if (!tryWebgl || webgl) return;
       cancelIdleCallback(webglTask);
-      if (!visible || !tryWebgl) return;
-      if (webgl) {
-        recentWebgl.delete(releaseWebgl);
-        recentWebgl.add(releaseWebgl);
-      } else {
-        webglTask = requestIdleCallback(loadWebgl);
-      }
+      if (visible) webglTask = requestIdleCallback(loadWebgl);
     });
     shown.observe(surface);
     const offTheme = context.global.subscribe<Theme>('theme', (next) => { term.options.theme = xtermTheme(next); });
@@ -262,8 +246,9 @@ function TerminalPane({ context, session, active, connected, generation, profile
       cancelIdleCallback(webglTask);
       surface.removeEventListener('paste', paste, true);
       input.dispose(); resize.dispose(); observer.disconnect(); shown.disconnect(); offTheme();
-      releaseWebgl();
-      command.dispose(); links.dispose(); socket?.close(); term.dispose(); terminal.current = null;
+      command.dispose(); links.dispose(); socket?.close();
+      disposeWithWebgl(() => term.dispose());
+      terminal.current = null;
       fit.current = null;
     };
   }, [session.id, connected, generation, profile]);
