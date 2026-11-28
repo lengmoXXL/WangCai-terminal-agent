@@ -1,8 +1,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { chmodSync, mkdirSync, writeFileSync } = require('node:fs');
+const { chmodSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { createConnection } = require('node:net');
 const { join } = require('node:path');
-const { until, withHome, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { openMachine } = require('@lengmoxxl/sdk');
+const { until, wangcaiApp, withHome, withWindow } = require('@lengmoxxl/wangcai-testkit');
+const { activate } = require('../main.cjs');
 const { lists, openWorkspaceMenu, pluginDirectory, storedWorkspace, tabs } = require('./terminal-agent-ui.cjs');
 
 test('a codex workspace asks for its remote directory before it starts', { timeout: 180000 }, () => withHome('wangcai-codex', {}, async ({ home, open }) => {
@@ -96,4 +99,123 @@ test('without codex enabled the menu offers no codex entries', { timeout: 180000
   const menu = page.locator('#workspace-row-menu');
   await menu.getByRole('menuitem', { name: '新建 本机' }).waitFor();
   assert.equal(await menu.getByRole('menuitem').filter({ hasText: 'codex' }).count(), 0);
+}));
+
+test('the local node keeps the shared Codex forward across desktop exits', { timeout: 180000 }, () => withHome('wc-fwd', {}, async ({ home, env }) => {
+  const dataDirectory = join(home, 'd s');
+  const bin = join(home, 'bin');
+  mkdirSync(dataDirectory);
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'ssh'), [
+    `#!${process.execPath}`,
+    "const { createServer } = require('node:net');",
+    "const [socket, target] = process.argv[process.argv.indexOf('-L') + 1].split(':');",
+    "createServer((client) => {",
+    "  client.on('error', () => {});",
+    "  client.once('data', () => client.end(`${process.pid} ${target}`));",
+    "}).listen(socket);",
+  ].join('\n'), { mode: 0o755 });
+  const command = join(bin, 'codex');
+  writeFileSync(command, '#!/bin/bash\nexec sleep 180\n', { mode: 0o755 });
+  const shell = join(bin, 'shell');
+  writeFileSync(shell, '#!/bin/bash\nexport PATH="$HOME/bin:$PATH"\nexec /bin/bash --noprofile --norc\n', { mode: 0o755 });
+  const connectLocal = () => openMachine({
+    type: 'local', binary: join(wangcaiApp(), 'wangcaicli/dist/debug/wangcai'),
+    env: { ...env, SHELL: shell, PATH: `${bin}:${env.PATH}` },
+  });
+  const state = { status: 'connected', sessions: [], generation: 1 };
+  let remoteSocket = '/tmp/remote-codex.sock';
+  const remote = {
+    state, onState: (update) => update(state), disconnect() {},
+    fs: { stat: async () => ({ isDirectory: true }) },
+    subprocess: {
+      exec: async (program) => ({
+        code: 0, stderr: Buffer.alloc(0), stdout: Buffer.from(program === 'codex'
+          ? JSON.stringify({ socketPath: remoteSocket }) : '/workspace'),
+      }),
+    },
+  };
+  const start = async (machines = [{ name: 'VM', host: 'fixture' }], connect = connectLocal) => {
+    const handlers = new Map();
+    const stop = await activate({
+      host: { dataDirectory, config: {
+        machines,
+        codex: { enabled: true, command, remoteCommand: 'codex', args: [] },
+        images: { maxCount: 1 },
+      } },
+      connect: async (machine) => machine.host ? remote : connect(),
+      ui: { handle: (name, handler) => { handlers.set(name, handler); return () => handlers.delete(name); }, publish() {} },
+      global: { subscribe: () => () => {}, publish: async () => {} },
+    });
+    return { stop, request: (name, params) => handlers.get(name)(params) };
+  };
+  const inspect = await connectLocal();
+  let plugin = await start();
+  try {
+    const create = (cwd) => plugin.request('workspace-create', { key: 'codex:fixture', cwd });
+    const first = await create('/workspace/first');
+    const saved = () => JSON.parse(readFileSync(join(dataDirectory, 'config.json'), 'utf8'));
+    const forward = saved().codexServers.fixture;
+    const sessionId = saved().workspaces[0].sessionId;
+    const probe = () => new Promise((resolve, reject) => {
+      const socket = createConnection(forward.localSocket);
+      socket.setTimeout(2000, () => socket.destroy(new Error('Forward probe timed out')));
+      socket.once('connect', () => socket.write('?'));
+      let reply = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (data) => { reply += data; });
+      socket.once('end', () => resolve(reply));
+      socket.once('error', reject);
+      socket.once('close', () => reject(new Error('Forward closed before replying')));
+    });
+    const reply = await probe();
+    const [pid, target] = reply.split(' ');
+    assert.equal((await inspect.pty.list()).find((session) => session.id === forward.forwardId)?.pid, Number(pid));
+    assert.equal(target, remoteSocket);
+
+    plugin.stop();
+    assert.equal(await probe(), reply);
+    plugin = await start();
+    await plugin.request('workspace-select', first);
+    assert.equal(saved().workspaces[0].sessionId, sessionId);
+    assert.deepEqual(saved().codexServers.fixture, forward);
+    const second = await create('/workspace/second');
+    await plugin.request('workspace-close', first);
+    assert.equal(await probe(), reply);
+
+    const secondSession = saved().workspaces[0].sessionId;
+    plugin.stop();
+    remoteSocket = '/tmp/remote-codex-new.sock';
+    plugin = await start();
+    await plugin.request('workspace-select', second);
+    const replaced = saved().codexServers.fixture;
+    assert.notEqual(replaced.forwardId, forward.forwardId);
+    assert.equal(replaced.localSocket, forward.localSocket);
+    assert.equal((await probe()).split(' ')[1], remoteSocket);
+    assert.equal(saved().workspaces[0].sessionId, secondSession);
+
+    plugin.stop();
+    plugin = await start();
+    await plugin.request('workspace-close', second);
+    assert.deepEqual(await inspect.pty.list(), []);
+    await until(() => probe().then(() => false, () => true));
+    assert.equal(saved().codexServers, undefined);
+
+    await create('/workspace/removed');
+    const unused = saved().codexServers.fixture;
+    plugin.stop();
+    let firstAttempt = true;
+    plugin = await start([], () => {
+      if (!firstAttempt) return connectLocal();
+      firstAttempt = false;
+      throw new Error('Local node temporarily unavailable');
+    });
+    const local = await plugin.request('workspace-create', { key: 'local' });
+    await until(() => saved().codexServers === undefined);
+    assert.ok(!(await inspect.pty.list()).some((session) => session.id === unused.forwardId));
+    assert.deepEqual(saved().workspaces.map((workspace) => workspace.id), [local.id]);
+  } finally {
+    plugin.stop();
+    inspect.disconnect();
+  }
 }));
