@@ -308,10 +308,9 @@ export async function activate(context: MainContext) {
     const live = codexLive.get(machine.id);
     const session = workspace.sessionId === undefined ? undefined : (await node.pty.list()).find((item) => item.id === workspace.sessionId);
     if (live && !live.forward?.exited && session && session.exit_code === null) return;
-    const prior = codexStored[machine.id];
     const server = await codexServer(machine, connections.get(machine.id)!);
-    // The TUI and any remote forward are daemon-held: if they survived the restart, rejoin rather than relaunch.
-    if (session && session.exit_code === null && (server.forward === undefined || server.forward.id === prior?.forwardId)) return;
+    // The TUI is daemon-held: if it survived, rejoin it; the forward is re-established at the same socket, so it reconnects.
+    if (session && session.exit_code === null) return;
     if (workspace.sessionId !== undefined) await node.pty.close(workspace.sessionId).catch(() => {});
     const created = await node.pty.create({ rows: 24, cols: 80 }, { label: `${nameOf(workspace)} - codex` });
     workspace.sessionId = created.id;
