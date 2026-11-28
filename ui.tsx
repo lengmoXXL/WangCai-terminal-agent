@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import type { Theme } from '@lengmoxxl/sdk';
 import type { UiContext } from '@lengmoxxl/sdk/channel';
 import { trackCommand } from './command';
@@ -36,10 +37,11 @@ function TerminalPane({ context, session, active, connected, generation, profile
 }) {
   const element = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>(null);
-  const fit = useRef<FitAddon>(null);
+  const fit = useRef<() => void>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    const surface = element.current!;
     const term = new Terminal({
       fontSize: profile.font.size, lineHeight: profile.font.lineHeight,
       fontFamily: profile.font.family,
@@ -56,7 +58,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
     // What the terminal prints as a web address is a link the app opens in a browser, on the click that holds
     // Command: on its own the click stays a click in the terminal.
     term.loadAddon(new WebLinksAddon((event, uri) => { if (event.metaKey) openAddress(uri); }));
-    term.open(element.current!);
+    term.open(surface);
     const links = registerFileLinks(term, {
       resolve: (paths) => api.resolve(session.id, paths),
       activate: (path, line, column) => { void api.click(session.id, { path, line, column }).catch((error: Error) => setError(error.message)); },
@@ -65,16 +67,19 @@ function TerminalPane({ context, session, active, connected, generation, profile
     // Command is what shows a link, and what the click on it opens with.
     const command = trackCommand(term.element!, links.setCommand);
     terminal.current = term;
-    fit.current = addon;
     let alive = true;
     let replaying = false;
+    const fitGrid = () => {
+      if (!replaying && surface.offsetWidth && surface.offsetHeight) addon.fit();
+    };
+    fit.current = fitGrid;
     let ready = false;
     let pending: string[] = [];
     let socket: WebSocket | undefined;
     let attempt = 0;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let lastReport = 0;
-    let visible = element.current!.offsetWidth > 0;
+    let visible = surface.offsetWidth > 0;
     let frame = 0;
     let chunks: Uint8Array[] = [];
     const flush = () => {
@@ -145,7 +150,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
               if (!alive) return;
               replaying = false;
               if (visible) {
-                addon.fit();
+                fitGrid();
                 sendSize();
               }
               const queued = pending;
@@ -188,20 +193,55 @@ function TerminalPane({ context, session, active, connected, generation, profile
         term.paste(/^[\w/.-]+$/.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`);
       }).catch((error: Error) => { if (alive) setError(error.message); });
     };
-    const surface = element.current!;
     term.attachCustomKeyEventHandler((event) => !(event.key.toLowerCase() === 'v' && (event.metaKey || event.ctrlKey) && !event.altKey));
     // Capture image pastes before xterm consumes the clipboard as plain text.
     surface.addEventListener('paste', paste, true);
-    const observer = new ResizeObserver(() => {
-      if (!replaying && element.current?.offsetWidth && element.current.offsetHeight) addon.fit();
+    const observer = new ResizeObserver(fitGrid);
+    observer.observe(surface);
+    let tryWebgl = profile.gpuAcceleration;
+    let webgl: { renderer: WebglAddon; canvases: HTMLCanvasElement[] } | undefined;
+    const releaseWebgl = () => {
+      if (!webgl) return;
+      const { renderer, canvases } = webgl;
+      webgl = undefined;
+      renderer.dispose();
+      // A detached canvas can still hold a GPU context when the next workspace needs one.
+      for (const canvas of canvases) {
+        const gl = canvas.getContext('webgl2');
+        if (gl && !gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext();
+        canvas.remove();
+      }
+    };
+    // A hidden pane keeps its buffer fed. Only the visible pane needs a GPU context.
+    const shown = new IntersectionObserver((entries) => {
+      if (!alive) return;
+      visible = entries.at(-1)!.isIntersecting;
+      if (!visible) {
+        releaseWebgl();
+        return;
+      }
+      if (!tryWebgl || webgl) return;
+      const canvasSelector = '.xterm-screen > canvas';
+      const existing = new Set(surface.querySelectorAll(canvasSelector));
+      try {
+        const renderer = new WebglAddon();
+        webgl = { renderer, canvases: [] };
+        renderer.onContextLoss(() => {
+          tryWebgl = false;
+          releaseWebgl();
+          fitGrid();
+        });
+        term.loadAddon(renderer);
+      } catch {
+        tryWebgl = false;
+      }
+      if (!webgl) return;
+      // The addon can append canvases before its shader setup throws.
+      webgl.canvases = [...surface.querySelectorAll<HTMLCanvasElement>(canvasSelector)].filter((canvas) => !existing.has(canvas));
+      if (!tryWebgl) releaseWebgl();
+      fitGrid();
     });
-    observer.observe(element.current!);
-    // A hidden pane keeps its buffer fed, so coming back only fits the grid again: no re-attach, no replay, no reset.
-    const shown = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting === visible) return;
-      visible = entry.isIntersecting;
-    });
-    shown.observe(element.current!);
+    shown.observe(surface);
     const offTheme = context.global.subscribe<Theme>('theme', (next) => { term.options.theme = xtermTheme(next); });
     return () => {
       alive = false;
@@ -209,7 +249,9 @@ function TerminalPane({ context, session, active, connected, generation, profile
       cancelAnimationFrame(frame);
       surface.removeEventListener('paste', paste, true);
       input.dispose(); resize.dispose(); observer.disconnect(); shown.disconnect(); offTheme();
+      releaseWebgl();
       command.dispose(); links.dispose(); socket?.close(); term.dispose(); terminal.current = null;
+      fit.current = null;
     };
   }, [session.id, connected, generation, profile]);
 
@@ -217,7 +259,7 @@ function TerminalPane({ context, session, active, connected, generation, profile
     if (!active) return;
     // The keys are this pane's as soon as it is in front: a frame later they would fall into the pane that just left.
     terminal.current?.focus();
-    requestAnimationFrame(() => fit.current?.fit());
+    requestAnimationFrame(() => fit.current?.());
   }, [active, connected, generation]);
 
   // A key that shows this workspace leaves the keys on the page, and the pane in front is what takes them. A press that

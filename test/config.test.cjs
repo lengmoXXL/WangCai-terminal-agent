@@ -12,7 +12,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
         day: {
           theme: { WangCai: { background: '#f7f8fa', foreground: '#203040', border: 42 } },
           workspaces: [
-            { id: 'terminal-agent', directory: ${JSON.stringify(pluginDirectory('terminal-agent'))}, config: { font: { family: 'Config UI Font' }, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }] } },
+            { id: 'terminal-agent', directory: ${JSON.stringify(pluginDirectory('terminal-agent'))}, config: { gpuAcceleration: false, font: { family: 'Config UI Font' }, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }] } },
           ],
           tabs: [
             { id: 'terminal', directory: ${JSON.stringify(pluginDirectory('terminal'))}, config: { font: { family: 'Config Mono', size: 20, lineHeight: 1.5 } } },
@@ -25,7 +25,7 @@ test('user config: init.ts drives the plugins, the UI theme, their own config an
   await until(() => page.evaluate(() => Boolean(window.wangcai)));
   assert.deepEqual(await page.evaluate(async () => (await window.wangcai.call('plugins')).map(({ id, config }) => [id, config])), [
     ['terminal', { font: { family: 'Config Mono', size: 20, lineHeight: 1.5 } }],
-    ['terminal-agent', { font: { family: 'Config UI Font', size: 13, lineHeight: 1 }, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }], images: { maxCount: 100 }, codex: { enabled: false, command: 'codex', remoteCommand: 'codex', args: [] } }],
+    ['terminal-agent', { font: { family: 'Config UI Font', size: 13, lineHeight: 1 }, gpuAcceleration: false, machines: [{ name: '测试服务器', host: 'wangcai-test.invalid' }], images: { maxCount: 100 }, codex: { enabled: false, command: 'codex', remoteCommand: 'codex', args: [] } }],
   ]);
   assert.deepEqual(await page.evaluate(() => {
     const body = getComputedStyle(document.body);

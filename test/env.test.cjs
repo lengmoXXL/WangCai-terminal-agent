@@ -12,7 +12,7 @@ test('a node started again carries what init.ts asks for, and its terminals have
   // The environment init.ts asks for, with a value only the machine that runs it can expand.
   const configured = (value) => writeFileSync(init, `
     export default {
-      workspaces: [{ id: 'terminal-agent', directory: ${JSON.stringify(pluginDirectory('terminal-agent'))}, config: { machines: [{ host: 'local', env: { WANGCAI_TEST_ENV: '${value}', WANGCAI_TEST_PATH: '$HOME/asked' } }] } }],
+      workspaces: [{ id: 'terminal-agent', directory: ${JSON.stringify(pluginDirectory('terminal-agent'))}, config: { gpuAcceleration: false, machines: [{ host: 'local', env: { WANGCAI_TEST_ENV: '${value}', WANGCAI_TEST_PATH: '$HOME/asked' } }] } }],
       tabs: [{ id: 'terminal', directory: ${JSON.stringify(pluginDirectory('terminal'))} }],
     };
   `);

@@ -18,6 +18,7 @@ export const config = {
     size: { type: 'number', default: 13 },
     lineHeight: { type: 'number', default: 1 },
   },
+  gpuAcceleration: { type: 'boolean', default: true },
   machines: { type: 'array', default: [] },
   images: { maxCount: { type: 'number', default: 100 } },
   codex: {

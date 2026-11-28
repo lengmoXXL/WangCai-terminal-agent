@@ -31,8 +31,8 @@ const openView = async (page, name) => {
   await page.locator('#view-menu').getByRole('button', { name, exact: true }).click();
 };
 
-// What a case's window lists: the workspace the agent watches, and the views the sidebar picks from.
-const lists = { workspaces: ['terminal-agent'], tabs: ['files', 'terminal'] };
+// The terminal's DOM rows supply the screen text for these cases.
+const lists = { workspaces: [{ id: 'terminal-agent', config: { gpuAcceleration: false } }], tabs: ['files', 'terminal'] };
 
 // A plugin checkout beside this one, which an init.ts written by a case points at.
 const pluginDirectory = (id) => resolve(__dirname, `../../WangCai-${id}`);

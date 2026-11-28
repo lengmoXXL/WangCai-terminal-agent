@@ -17,7 +17,7 @@ test('what a program in the terminal copies reaches the system clipboard', { tim
   await until(async () => (await page.evaluate(() => navigator.clipboard.readText())) === text);
 }));
 
-test('pasting clipboard images writes a rotated cache and inserts its path into terminal-agent', { timeout: 180000 }, () => withHome('wangcai-image-clipboard', { workspaces: [{ id: 'terminal-agent', config: { images: { maxCount: 1 } } }], tabs: [] }, async ({ home, open }) => {
+test('pasting clipboard images writes a rotated cache and inserts its path into terminal-agent', { timeout: 180000 }, () => withHome('wangcai-image-clipboard', { workspaces: [{ id: 'terminal-agent', config: { gpuAcceleration: false, images: { maxCount: 1 } } }], tabs: [] }, async ({ home, open }) => {
   const { desktop, page } = await open();
   await createWorkspace(page);
   const directory = join(home, '.cache/WangCai-terminal-agent/images');
